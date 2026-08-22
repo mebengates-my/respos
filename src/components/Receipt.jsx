@@ -1,12 +1,16 @@
-import React, { useRef, useEffect } from 'react';
-import { useApp } from '../context/AppContext';
-import { t } from '../data/language';
-import { Printer, Download, X, Check } from 'lucide-react';
+import React, { useRef } from 'react';
+import { Printer, Download, X } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { loadStoreSettings } from '../data/storeSettings';
 
+// Currency-aware price formatter
+const formatPriceFromCents = (cents, settings) => {
+  const sym = settings?.currencySymbol || 'RM';
+  return `${sym} ${(cents / 100).toFixed(2)}`;
+};
+
 // Generate receipt text for thermal printer (ESC/POS format simulation)
-const generateThermalReceiptText = (order, settings, isReprint = false) => {
+export const generateThermalReceiptText = (order, settings, isReprint = false) => {
   const lines = [];
   const width = settings.printerType === '80mm' ? 48 : 40;
   
@@ -19,11 +23,11 @@ const generateThermalReceiptText = (order, settings, isReprint = false) => {
   
   // Header
   lines.push('');
-  lines.push(center('★ ' + settings.name.toUpperCase() + ' ★'));
+  lines.push(center('★ ' + (settings.name || 'YOUR BUSINESS').toUpperCase() + ' ★'));
   if (settings.tagline) lines.push(center(settings.tagline));
   divider();
-  lines.push(center(settings.address));
-  lines.push(center(settings.city));
+  if (settings.address) lines.push(center(settings.address));
+  if (settings.city) lines.push(center(settings.city));
   if (settings.phone) lines.push(center('Tel: ' + settings.phone));
   divider();
   
@@ -37,6 +41,9 @@ const generateThermalReceiptText = (order, settings, isReprint = false) => {
   lines.push(`Date  : ${dateStr}`);
   lines.push(`Time  : ${timeStr}`);
   lines.push(`Order : #${order.id.slice(-8)}`);
+  if (order.serverId || order.serverName) {
+    lines.push(`Server: ${order.serverName || order.serverId}`);
+  }
   if (order.tableId && order.tableId !== 'COUNTER') {
     lines.push(`Table : ${order.tableId.replace('T', '')}`);
   } else {
@@ -48,8 +55,9 @@ const generateThermalReceiptText = (order, settings, isReprint = false) => {
   lines.push('');
   lines.push('ITEMS');
   order.items.forEach(item => {
+    const modifierTotal = (item.modifiers || []).reduce((s, m) => s + (m.price || 0), 0);
     const itemLine = `${item.quantity}x ${item.name}`;
-    const priceStr = `RM ${((item.price * item.quantity) / 100).toFixed(2)}`;
+    const priceStr = formatPriceFromCents((item.price + modifierTotal) * item.quantity, settings);
     const dots = width - itemLine.length - priceStr.length;
     lines.push(itemLine + ' '.repeat(Math.max(1, dots)) + priceStr);
     
@@ -57,7 +65,7 @@ const generateThermalReceiptText = (order, settings, isReprint = false) => {
     if (item.modifiers && item.modifiers.length > 0) {
       item.modifiers.forEach(mod => {
         const modLine = `   + ${mod.name}`;
-        const modPrice = `RM ${(mod.price / 100).toFixed(2)}`;
+        const modPrice = formatPriceFromCents(mod.price || 0, settings);
         const dots2 = width - modLine.length - modPrice.length;
         lines.push(modLine + ' '.repeat(Math.max(1, dots2)) + modPrice);
       });
@@ -74,38 +82,38 @@ const generateThermalReceiptText = (order, settings, isReprint = false) => {
   // Totals
   lines.push('');
   const totalLabel = 'SUBTOTAL';
-  const totalVal = `RM ${(order.subtotal / 100).toFixed(2)}`;
+  const totalVal = formatPriceFromCents(order.subtotal, settings);
   const dots3 = width - totalLabel.length - totalVal.length;
   lines.push(totalLabel + ' '.repeat(Math.max(1, dots3)) + totalVal);
   
   if (order.discount && order.discountAmount > 0) {
     const discLabel = `${order.discount.name} (-)`;
-    const discVal = `RM ${(order.discountAmount / 100).toFixed(2)}`;
+    const discVal = formatPriceFromCents(order.discountAmount, settings);
     const dots4 = width - discLabel.length - discVal.length;
     lines.push(discLabel + ' '.repeat(Math.max(1, dots4)) + discVal);
   }
   
   const taxLabel = `TAX (${(settings.taxRate * 100).toFixed(0)}%)`;
-  const taxVal = `RM ${(order.tax / 100).toFixed(2)}`;
+  const taxVal = formatPriceFromCents(order.tax, settings);
   const dots5 = width - taxLabel.length - taxVal.length;
   lines.push(taxLabel + ' '.repeat(Math.max(1, dots5)) + taxVal);
   
   divider();
   
   const grandLabel = 'TOTAL';
-  const grandVal = `RM ${(order.total / 100).toFixed(2)}`;
+  const grandVal = formatPriceFromCents(order.total, settings);
   const dots6 = width - grandLabel.length - grandVal.length;
   lines.push(grandLabel + ' '.repeat(Math.max(1, dots6)) + grandVal);
   
   lines.push('');
-  const payLabel = order.paymentMethod.toUpperCase();
-  const payVal = `RM ${(order.amountPaid / 100).toFixed(2)}`;
+  const payLabel = (order.paymentMethod || 'PAYMENT').toUpperCase();
+  const payVal = formatPriceFromCents(order.amountPaid ?? order.total, settings);
   const dots7 = width - payLabel.length - payVal.length;
   lines.push(payLabel + ' '.repeat(Math.max(1, dots7)) + payVal);
   
   if (order.change > 0) {
     const changeLabel = 'CHANGE';
-    const changeVal = `RM ${(order.change / 100).toFixed(2)}`;
+    const changeVal = formatPriceFromCents(order.change, settings);
     const dots8 = width - changeLabel.length - changeVal.length;
     lines.push(changeLabel + ' '.repeat(Math.max(1, dots8)) + changeVal);
   }
@@ -124,71 +132,83 @@ const generateThermalReceiptText = (order, settings, isReprint = false) => {
   return lines.join('\n');
 };
 
-// Format price
-const formatPrice = (cents) => `RM ${(cents / 100).toFixed(2)}`;
+// Open the browser print dialog for a thermal receipt.
+// Returns true on success, false if the popup was blocked.
+export const printThermalReceipt = (order, settingsOverride) => {
+  const settings = settingsOverride || loadStoreSettings();
+  const widthMm = settings.printerType === '80mm' ? '80mm' : '58mm';
+  const receiptText = generateThermalReceiptText(order, settings);
+  
+  const printWindow = window.open('', '_blank', 'width=300,height=600');
+  if (!printWindow) {
+    return false; // popup blocked
+  }
+  
+  printWindow.document.write(`
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <title>Receipt - ${settings.name || 'Receipt'}</title>
+      <style>
+        @page { margin: 0; size: ${widthMm} auto; }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+          font-family: 'Courier New', monospace;
+          font-size: 12px;
+          width: ${widthMm};
+          padding: 5px;
+          background: white;
+        }
+        .receipt { white-space: pre-wrap; line-height: 1.4; }
+        @media print {
+          body { padding: 0; }
+        }
+      </style>
+    </head>
+    <body>
+      <div class="receipt">${receiptText.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>
+      <script>
+        window.onload = function() {
+          window.print();
+          setTimeout(function() { window.close(); }, 500);
+        };
+      </script>
+    </body>
+    </html>
+  `);
+  printWindow.document.close();
+  return true;
+};
+
+// Download the thermal receipt as a .txt file
+export const downloadReceiptText = (order, settingsOverride) => {
+  const settings = settingsOverride || loadStoreSettings();
+  const text = generateThermalReceiptText(order, settings);
+  const blob = new Blob([text], { type: 'text/plain' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `receipt-${order.id.slice(-8)}.txt`;
+  a.click();
+  URL.revokeObjectURL(url);
+};
 
 export default function Receipt({ order, onClose, showPrint = true }) {
-  const { state } = useApp();
-  const { language } = state;
   const printRef = useRef(null);
   const settings = loadStoreSettings();
   
   if (!order) return null;
   
+  const formatPrice = (cents) => formatPriceFromCents(cents, settings);
+  
   const handlePrint = () => {
-    const printContent = printRef.current;
-    const printWindow = window.open('', '_blank', 'width=300,height=600');
-    printWindow.document.write(`
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <title>Receipt - ${settings.name}</title>
-        <style>
-          @page { margin: 0; size: 80mm auto; }
-          * { margin: 0; padding: 0; box-sizing: border-box; }
-          body { 
-            font-family: 'Courier New', monospace; 
-            font-size: 12px; 
-            width: 80mm; 
-            padding: 5px;
-            background: white;
-          }
-          .receipt { white-space: pre-wrap; line-height: 1.4; }
-          .center { text-align: center; }
-          .divider { border-top: 1px dashed #000; margin: 8px 0; }
-          .bold { font-weight: bold; }
-          .right { text-align: right; }
-          @media print {
-            body { padding: 0; }
-          }
-        </style>
-      </head>
-      <body>
-        <div class="receipt">
-${generateThermalReceiptText(order, settings).replace(/</g, '&lt;').replace(/>/g, '&gt;')}
-        </div>
-        <script>
-          window.onload = function() {
-            window.print();
-            setTimeout(function() { window.close(); }, 500);
-          };
-        </script>
-      </body>
-      </html>
-    `);
-    printWindow.document.close();
+    const ok = printThermalReceipt(order, settings);
+    if (!ok) {
+      alert('Please allow pop-ups to print the receipt. You can still download it instead.');
+    }
   };
   
-  const handleDownload = () => {
-    const text = generateThermalReceiptText(order, settings);
-    const blob = new Blob([text], { type: 'text/plain' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `receipt-${order.id.slice(-8)}.txt`;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
+  const handleDownload = () => downloadReceiptText(order, settings);
   
   const now = new Date();
   
@@ -197,7 +217,7 @@ ${generateThermalReceiptText(order, settings).replace(/</g, '&lt;').replace(/>/g
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
-      className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+      className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[60] flex items-center justify-center p-4"
       onClick={onClose}
     >
       <motion.div
@@ -221,12 +241,12 @@ ${generateThermalReceiptText(order, settings).replace(/</g, '&lt;').replace(/>/g
         {/* Receipt Preview */}
         <div className="p-4 bg-gray-100 max-h-[60vh] overflow-auto">
           <div ref={printRef} className="bg-white p-4 mx-auto shadow-lg" style={{ width: '240px', fontFamily: 'Courier New, monospace', fontSize: '11px', whiteSpace: 'pre-wrap', lineHeight: '1.4' }}>
-            <div className="text-center font-bold">{settings.name.toUpperCase()}</div>
+            <div className="text-center font-bold">{(settings.name || 'YOUR BUSINESS').toUpperCase()}</div>
             {settings.tagline && <div className="text-center text-xs">{settings.tagline}</div>}
             <div className="border-t border-b border-dashed border-gray-400 my-2 py-2 text-center text-xs">
-              {settings.address}<br/>
-              {settings.city}<br/>
-              Tel: {settings.phone}
+              {settings.address && <>{settings.address}<br/></>}
+              {settings.city && <>{settings.city}<br/></>}
+              {settings.phone && <>Tel: {settings.phone}</>}
             </div>
             <div className="text-xs">
               <div>Date : {now.toLocaleDateString('en-GB')}</div>
@@ -254,7 +274,7 @@ ${generateThermalReceiptText(order, settings).replace(/</g, '&lt;').replace(/>/g
                 </div>
               )}
               <div className="flex justify-between">
-                <span>TAX (6%)</span>
+                <span>TAX ({(settings.taxRate * 100).toFixed(0)}%)</span>
                 <span className="font-mono">{formatPrice(order.tax)}</span>
               </div>
               <div className="flex justify-between font-bold border-t border-dashed border-gray-400 pt-1">
@@ -264,8 +284,8 @@ ${generateThermalReceiptText(order, settings).replace(/</g, '&lt;').replace(/>/g
             </div>
             <div className="border-t border-b border-dashed border-gray-400 my-2 py-2 text-xs">
               <div className="flex justify-between">
-                <span>{order.paymentMethod.toUpperCase()}</span>
-                <span className="font-mono">{formatPrice(order.amountPaid)}</span>
+                <span>{(order.paymentMethod || 'PAYMENT').toUpperCase()}</span>
+                <span className="font-mono">{formatPrice(order.amountPaid ?? order.total)}</span>
               </div>
               {order.change > 0 && (
                 <div className="flex justify-between">
@@ -305,40 +325,10 @@ ${generateThermalReceiptText(order, settings).replace(/</g, '&lt;').replace(/>/g
   );
 }
 
-// Hook for printing receipts
+// Hook for printing receipts programmatically
 export const useReceipt = () => {
-  const printReceipt = (order) => {
-    const settings = loadStoreSettings();
-    const receiptText = generateThermalReceiptText(order, settings);
-    
-    const printWindow = window.open('', '_blank', 'width=300,height=600');
-    printWindow.document.write(`
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <title>Receipt</title>
-        <style>
-          body { 
-            font-family: 'Courier New', monospace; 
-            font-size: 12px; 
-            width: 80mm; 
-            padding: 10px;
-            margin: 0;
-          }
-          @media print {
-            body { padding: 0; }
-            @page { margin: 0; size: 80mm auto; }
-          }
-        </style>
-      </head>
-      <body>
-        <pre>${receiptText}</pre>
-        <script>window.onload = function() { window.print(); };</script>
-      </body>
-      </html>
-    `);
-    printWindow.document.close();
-  };
+  const printReceipt = (order) => printThermalReceipt(order);
+  const downloadReceipt = (order) => downloadReceiptText(order);
   
-  return { printReceipt };
+  return { printReceipt, downloadReceipt };
 };
