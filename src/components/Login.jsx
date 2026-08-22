@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useApp } from '../context/AppContext';
 import { t } from '../data/language';
+import Onboarding from './Onboarding';
 import {
   Coffee,
   User,
@@ -9,17 +10,25 @@ import {
   Briefcase,
   ArrowRight,
   AlertCircle,
-  Globe
+  Globe,
+  Store
 } from 'lucide-react';
 import { motion } from 'framer-motion';
 
 export default function Login() {
   const { state, actions } = useApp();
   const { users, language } = state;
+  const [loginMode, setLoginMode] = useState('staff'); // 'staff' | 'cloud'
   const [selectedUser, setSelectedUser] = useState(null);
   const [pin, setPin] = useState('');
   const [error, setError] = useState('');
   const [showLangMenu, setShowLangMenu] = useState(false);
+
+  // Cloud/owner login (Supabase or the in-browser mock) is a separate full
+  // screen so it does not disturb the existing staff PIN flow.
+  if (loginMode === 'cloud') {
+    return <Onboarding onBack={() => setLoginMode('staff')} />;
+  }
   
   const handleLanguageChange = (lang) => {
     actions.setLanguage(lang);
@@ -249,9 +258,18 @@ export default function Login() {
         </motion.div>
         
         {/* Footer */}
-        <p className="text-center text-latte/60 text-sm mt-6">
-          © 2024 Café POS System
-        </p>
+        <div className="text-center mt-6 space-y-3">
+          <button
+            onClick={() => setLoginMode('cloud')}
+            className="inline-flex items-center gap-2 px-5 py-2.5 bg-white/10 backdrop-blur-sm rounded-xl text-white hover:bg-white/20 transition-colors"
+          >
+            <Store className="w-4 h-4" />
+            <span className="text-sm font-medium">{t('storeLogin', language)}</span>
+          </button>
+          <p className="text-latte/60 text-sm">
+            © 2024 Café POS System
+          </p>
+        </div>
       </div>
     </div>
   );

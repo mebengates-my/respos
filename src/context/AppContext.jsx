@@ -17,6 +17,7 @@ import {
   saveToStorage,
   loadFromStorage
 } from '../utils/helpers';
+import { cloudAuth, buildAppUser, isCloudEnabled } from '../services/cloud';
 
 const AppContext = createContext(null);
 
@@ -24,6 +25,7 @@ const AppContext = createContext(null);
 const ACTIONS = {
   // Auth
   LOGIN: 'LOGIN',
+  CLOUD_LOGIN: 'CLOUD_LOGIN',
   LOGOUT: 'LOGOUT',
   SET_LANGUAGE: 'SET_LANGUAGE',
   
@@ -92,6 +94,10 @@ const ACTIONS = {
 // user record is always re-resolved against the persisted users list.
 export const SESSION_STORAGE_KEY = 'cafe-pos-session';
 
+// localStorage key holding the signed-in cloud (Supabase) session: the auth user
+// id + the selected store id. Re-validated against the backend on load.
+export const CLOUD_SESSION_STORAGE_KEY = 'cafe-pos-session-cloud';
+
 // Initial users (staff)
 const defaultUsers = [
   { id: 'admin-1', name: 'Admin User', role: 'admin', pin: '1234', active: true },
@@ -118,6 +124,9 @@ const initialState = {
   currentUser: null,
   isLoggedIn: false,
   language: 'en',
+  // Set when the signed-in user came through the cloud/Supabase path. Holds
+  // { userId, storeId } so logout and refresh-restore know which backend to use.
+  cloudSession: null,
   
   // View
   view: 'pos', // 'pos' | 'tables' | 'reports' | 'admin'
@@ -206,7 +215,19 @@ function appReducer(state, action) {
       };
     
     case ACTIONS.LOGOUT:
-      return { ...state, currentUser: null, isLoggedIn: false, view: 'pos', currentOrder: null };
+      return { ...state, currentUser: null, isLoggedIn: false, view: 'pos', currentOrder: null, cloudSession: null };
+
+    case ACTIONS.CLOUD_LOGIN:
+      return {
+        ...state,
+        currentUser: action.payload.user,
+        isLoggedIn: true,
+        cloudSession: action.payload.session,
+        // Same landing rule as PIN login: admins/managers go to the panel.
+        view: action.payload.user.role === 'admin' || action.payload.user.role === 'manager'
+          ? 'admin'
+          : 'pos',
+      };
     
     case ACTIONS.SET_LANGUAGE:
       return { ...state, language: action.payload };
@@ -794,6 +815,47 @@ export function AppProvider({ children }) {
     return () => window.removeEventListener('storage', syncFromAnotherTab);
   }, []);
 
+  // Restore a cloud (Supabase/mock) session across a refresh. Only the auth user id
+  // + store id are persisted; the role/display name are re-resolved from the backend
+  // so a revoked or moved membership cannot be restored.
+  useEffect(() => {
+    const cloudSession = loadFromStorage(CLOUD_SESSION_STORAGE_KEY, null);
+    if (cloudSession?.userId) {
+      restoreCloudSession(cloudSession);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function restoreCloudSession(cloudSession) {
+    try {
+      const { data } = await cloudAuth.getSession();
+      if (!data?.user) {
+        saveToStorage(CLOUD_SESSION_STORAGE_KEY, null);
+        return;
+      }
+      const { data: stores, error } = await cloudAuth.listMyStores();
+      if (error) {
+        saveToStorage(CLOUD_SESSION_STORAGE_KEY, null);
+        return;
+      }
+      const membership = (stores || []).find((s) => s.id === cloudSession.storeId);
+      if (!membership) {
+        // User signed in but the previously-selected store is gone.
+        saveToStorage(CLOUD_SESSION_STORAGE_KEY, null);
+        return;
+      }
+      dispatch({
+        type: ACTIONS.CLOUD_LOGIN,
+        payload: {
+          user: buildAppUser(data.user, membership),
+          session: { userId: data.user.id, storeId: membership.id },
+        },
+      });
+    } catch {
+      saveToStorage(CLOUD_SESSION_STORAGE_KEY, null);
+    }
+  }
+
   // Report the actual browser connection state. All POS actions still work offline
   // because the application shell and operational data are stored on the device.
   useEffect(() => {
@@ -863,8 +925,24 @@ export function AppProvider({ children }) {
     }, []),
     
     logout: useCallback(() => {
+      // Clear both session types so a refresh cannot silently restore either.
       saveToStorage(SESSION_STORAGE_KEY, null);
+      saveToStorage(CLOUD_SESSION_STORAGE_KEY, null);
+      if (isCloudEnabled) {
+        cloudAuth.signOut().catch(() => {});
+      }
       dispatch({ type: ACTIONS.LOGOUT });
+    }, []),
+
+    // Sign in through the cloud/Supabase path. `authUser` is the resolved auth user
+    // (from getSession/signUp/signIn), `membership` is the store_members row with its
+    // role + display name. We build an app-shaped `currentUser` so every existing role
+    // check (Header, AdminPanel, PaymentModal) keeps working unchanged.
+    cloudLogin: useCallback((authUser, membership) => {
+      const user = buildAppUser(authUser, membership);
+      const session = { userId: user.id, storeId: membership?.id || null, signedInAt: Date.now() };
+      saveToStorage(CLOUD_SESSION_STORAGE_KEY, session);
+      dispatch({ type: ACTIONS.CLOUD_LOGIN, payload: { user, session } });
     }, []),
     
     setLanguage: useCallback((lang) => {
