@@ -53,6 +53,14 @@ const ACTIONS = {
   UPDATE_USER: 'UPDATE_USER',
   DELETE_USER: 'DELETE_USER',
   
+  // Expenses (Admin & Manager)
+  ADD_EXPENSE_CATEGORY: 'ADD_EXPENSE_CATEGORY',
+  UPDATE_EXPENSE_CATEGORY: 'UPDATE_EXPENSE_CATEGORY',
+  DELETE_EXPENSE_CATEGORY: 'DELETE_EXPENSE_CATEGORY',
+  ADD_EXPENSE: 'ADD_EXPENSE',
+  UPDATE_EXPENSE: 'UPDATE_EXPENSE',
+  DELETE_EXPENSE: 'DELETE_EXPENSE',
+  
   // Orders
   ADD_ITEM: 'ADD_ITEM',
   UPDATE_ITEM: 'UPDATE_ITEM',
@@ -92,6 +100,17 @@ const defaultUsers = [
   { id: 'server-3', name: 'Sarah Lee', role: 'server', pin: '3333', active: true },
 ];
 
+// Initial expense categories (business costs, separate from menu categories)
+const defaultExpenseCategories = [
+  { id: 'exp-cat-rent', name: 'Rent' },
+  { id: 'exp-cat-salaries', name: 'Salaries' },
+  { id: 'exp-cat-ingredients', name: 'Ingredients & Supplies' },
+  { id: 'exp-cat-utilities', name: 'Utilities' },
+  { id: 'exp-cat-marketing', name: 'Marketing' },
+  { id: 'exp-cat-maintenance', name: 'Maintenance' },
+  { id: 'exp-cat-other', name: 'Other' },
+];
+
 // Initial state
 const initialState = {
   // Auth
@@ -116,6 +135,10 @@ const initialState = {
   
   // Users
   users: defaultUsers,
+  
+  // Expenses
+  expenseCategories: defaultExpenseCategories,
+  expenses: [],
   
   // Orders
   currentOrder: null,
@@ -160,6 +183,10 @@ function getPersistedState(savedState) {
     selectedCategory,
     users: savedState?.users || defaultUsers,
     language: savedState?.language || 'en',
+    expenseCategories: Array.isArray(savedState?.expenseCategories) && savedState.expenseCategories.length > 0
+      ? savedState.expenseCategories
+      : defaultExpenseCategories,
+    expenses: savedState?.expenses || [],
   };
 }
 
@@ -358,6 +385,61 @@ function appReducer(state, action) {
       return {
         ...state,
         users: state.users.filter(user => user.id !== action.payload),
+      };
+    
+    // Expenses
+    case ACTIONS.ADD_EXPENSE_CATEGORY: {
+      const newExpenseCategory = {
+        id: `exp-cat-${Date.now()}`,
+        ...action.payload,
+      };
+      return { ...state, expenseCategories: [...state.expenseCategories, newExpenseCategory] };
+    }
+    
+    case ACTIONS.UPDATE_EXPENSE_CATEGORY: {
+      const { id, updates } = action.payload;
+      return {
+        ...state,
+        expenseCategories: state.expenseCategories.map(cat =>
+          cat.id === id ? { ...cat, ...updates } : cat
+        ),
+      };
+    }
+    
+    case ACTIONS.DELETE_EXPENSE_CATEGORY: {
+      // Deleting a category also removes every expense recorded inside it
+      // (the UI confirms this before dispatching).
+      return {
+        ...state,
+        expenseCategories: state.expenseCategories.filter(cat => cat.id !== action.payload),
+        expenses: state.expenses.filter(expense => expense.categoryId !== action.payload),
+      };
+    }
+    
+    case ACTIONS.ADD_EXPENSE: {
+      const newExpense = {
+        id: `exp-${Date.now()}`,
+        ...action.payload,
+        createdBy: action.payload.createdBy || state.currentUser?.name,
+        createdAt: Date.now(),
+      };
+      return { ...state, expenses: [newExpense, ...state.expenses] };
+    }
+    
+    case ACTIONS.UPDATE_EXPENSE: {
+      const { id, updates } = action.payload;
+      return {
+        ...state,
+        expenses: state.expenses.map(expense =>
+          expense.id === id ? { ...expense, ...updates } : expense
+        ),
+      };
+    }
+    
+    case ACTIONS.DELETE_EXPENSE:
+      return {
+        ...state,
+        expenses: state.expenses.filter(expense => expense.id !== action.payload),
       };
     
     // Orders
@@ -739,6 +821,8 @@ export function AppProvider({ children }) {
         selectedCategory: state.selectedCategory,
         users: state.users,
         language: state.language,
+        expenseCategories: state.expenseCategories,
+        expenses: state.expenses,
       });
     };
     
@@ -753,6 +837,8 @@ export function AppProvider({ children }) {
     state.selectedCategory,
     state.users,
     state.language,
+    state.expenseCategories,
+    state.expenses,
   ]);
   
   // Toast auto-dismiss
@@ -858,6 +944,31 @@ export function AppProvider({ children }) {
     
     deleteUser: useCallback((id) => {
       dispatch({ type: ACTIONS.DELETE_USER, payload: id });
+    }, []),
+    
+    // Expenses
+    addExpenseCategory: useCallback((data) => {
+      dispatch({ type: ACTIONS.ADD_EXPENSE_CATEGORY, payload: data });
+    }, []),
+    
+    updateExpenseCategory: useCallback((id, updates) => {
+      dispatch({ type: ACTIONS.UPDATE_EXPENSE_CATEGORY, payload: { id, updates } });
+    }, []),
+    
+    deleteExpenseCategory: useCallback((id) => {
+      dispatch({ type: ACTIONS.DELETE_EXPENSE_CATEGORY, payload: id });
+    }, []),
+    
+    addExpense: useCallback((data) => {
+      dispatch({ type: ACTIONS.ADD_EXPENSE, payload: data });
+    }, []),
+    
+    updateExpense: useCallback((id, updates) => {
+      dispatch({ type: ACTIONS.UPDATE_EXPENSE, payload: { id, updates } });
+    }, []),
+    
+    deleteExpense: useCallback((id) => {
+      dispatch({ type: ACTIONS.DELETE_EXPENSE, payload: id });
     }, []),
     
     // Orders

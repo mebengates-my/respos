@@ -173,6 +173,38 @@ export const translations = {
     noOpenOrders: 'No open orders right now',
     activeNow: 'Active now',
     liveView: 'Live view of every unpaid order',
+    
+    // Expenses
+    expenses: 'Expenses',
+    expenseCategories: 'Expense Categories',
+    addExpense: 'Add Expense',
+    editExpense: 'Edit Expense',
+    deleteExpense: 'Delete Expense',
+    addExpenseCategory: 'Add Expense Category',
+    editExpenseCategory: 'Edit Expense Category',
+    expenseDescription: 'Description',
+    expenseAmount: 'Amount',
+    expenseDate: 'Date & Time',
+    expenseCategory: 'Category',
+    noExpenses: 'No expenses recorded',
+    expensesInCategory: 'expenses',
+    deleteExpenseCategoryWarning: 'All expenses inside this category will also be deleted.',
+    
+    // Profit & Loss
+    profitAndLoss: 'Profit & Loss',
+    totalExpenses: 'Total Expenses',
+    netProfit: 'Net Profit',
+    netLoss: 'Net Loss',
+    profitMargin: 'Profit Margin',
+    yesterday: 'Yesterday',
+    last7Days: 'Last 7 Days',
+    last30Days: 'Last 30 Days',
+    salesVsExpenses: 'Sales vs Expenses',
+    expensesByCategory: 'Expenses by Category',
+    salesLegend: 'Sales',
+    expensesLegend: 'Expenses',
+    bestSalesDay: 'Best sales day',
+    highestExpenseDay: 'Highest expense day',
   },
   
   bn: {
@@ -348,6 +380,38 @@ export const translations = {
     noOpenOrders: 'এখন কোনো খোলা অর্ডার নেই',
     activeNow: 'এখন সক্রিয়',
     liveView: 'সব অবিশোধিত অর্ডারের লাইভ ভিউ',
+    
+    // Expenses
+    expenses: 'খরচ',
+    expenseCategories: 'খরচের ক্যাটাগরি',
+    addExpense: 'খরচ যোগ করুন',
+    editExpense: 'খরচ সম্পাদনা',
+    deleteExpense: 'খরচ মুছুন',
+    addExpenseCategory: 'খরচের ক্যাটাগরি যোগ',
+    editExpenseCategory: 'খরচের ক্যাটাগরি সম্পাদনা',
+    expenseDescription: 'বিবরণ',
+    expenseAmount: 'পরিমাণ',
+    expenseDate: 'তারিখ ও সময়',
+    expenseCategory: 'ক্যাটাগরি',
+    noExpenses: 'কোনো খরচ রেকর্ড নেই',
+    expensesInCategory: 'খরচ',
+    deleteExpenseCategoryWarning: 'এই ক্যাটাগরির সব খরচও মুছে যাবে।',
+    
+    // Profit & Loss
+    profitAndLoss: 'লাভ-ক্ষতি',
+    totalExpenses: 'মোট খরচ',
+    netProfit: 'নিট লাভ',
+    netLoss: 'নিট ক্ষতি',
+    profitMargin: 'লাভের হার',
+    yesterday: 'গতকাল',
+    last7Days: 'শেষ ৭ দিন',
+    last30Days: 'শেষ ৩০ দিন',
+    salesVsExpenses: 'বিক্রয় বনাম খরচ',
+    expensesByCategory: 'ক্যাটাগরি অনুযায়ী খরচ',
+    salesLegend: 'বিক্রয়',
+    expensesLegend: 'খরচ',
+    bestSalesDay: 'সেরা বিক্রয়ের দিন',
+    highestExpenseDay: 'সর্বোচ্চ খরচের দিন',
   }
 };
 

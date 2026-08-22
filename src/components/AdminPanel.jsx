@@ -34,7 +34,11 @@ import {
   LayoutGrid,
   ClipboardList,
   Pause,
-  ShoppingCart
+  ShoppingCart,
+  Wallet,
+  Tags,
+  TrendingDown,
+  CalendarDays
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -46,6 +50,9 @@ const AdminViews = {
   MENU_ITEMS: 'menu_items',
   TABLES: 'tables',
   REPORTS: 'reports',
+  EXPENSES: 'expenses',
+  EXPENSE_CATEGORIES: 'expense_categories',
+  PNL: 'pnl',
   SETTINGS: 'settings'
 };
 
@@ -68,6 +75,9 @@ export default function AdminPanel() {
     { id: AdminViews.MENU_ITEMS, icon: Coffee, label: t('menuItems', language) },
     { id: AdminViews.TABLES, icon: Grid3X3, label: t('tableManagement', language) },
     { id: AdminViews.REPORTS, icon: FileText, label: t('reportManagement', language) },
+    { id: AdminViews.EXPENSES, icon: Wallet, label: t('expenses', language) },
+    { id: AdminViews.EXPENSE_CATEGORIES, icon: Tags, label: t('expenseCategories', language) },
+    { id: AdminViews.PNL, icon: TrendingDown, label: t('profitAndLoss', language) },
     { id: AdminViews.SETTINGS, icon: Settings, label: t('settings', language) },
   ].filter(item => !(isManager && MANAGER_HIDDEN_VIEWS.includes(item.id)));
   
@@ -156,6 +166,9 @@ export default function AdminPanel() {
         {currentView === AdminViews.MENU_ITEMS && <MenuItemsView language={language} state={state} actions={actions} />}
         {currentView === AdminViews.TABLES && <TablesView language={language} state={state} actions={actions} />}
         {currentView === AdminViews.REPORTS && <ReportsView language={language} state={state} actions={actions} />}
+        {currentView === AdminViews.EXPENSES && <ExpensesView language={language} state={state} actions={actions} />}
+        {currentView === AdminViews.EXPENSE_CATEGORIES && <ExpenseCategoriesView language={language} state={state} actions={actions} />}
+        {currentView === AdminViews.PNL && <ProfitLossView language={language} state={state} />}
         {currentView === AdminViews.SETTINGS && !isManager && <StoreSettingsView language={language} state={state} actions={actions} />}
       </main>
     </div>
@@ -846,6 +859,526 @@ function StoreSettingsView({ language, state, actions }) {
               <button onClick={() => actions.setLanguage('bn')} className={`flex-1 py-4 rounded-xl font-medium flex items-center justify-center gap-2 ${state.language === 'bn' ? 'bg-accent text-white' : 'bg-cream hover:bg-latte/20'}`}>🇧🇩 বাংলা</button>
             </div>
           </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ==================== EXPENSE CATEGORIES VIEW ====================
+function ExpenseCategoriesView({ language, state, actions }) {
+  const { expenseCategories, expenses } = state;
+  const confirm = useConfirm();
+  const [showModal, setShowModal] = useState(false);
+  const [editingCategory, setEditingCategory] = useState(null);
+  const [formData, setFormData] = useState({ name: '' });
+  
+  const handleSubmit = () => {
+    if (!formData.name.trim()) return;
+    if (editingCategory) { actions.updateExpenseCategory(editingCategory.id, { name: formData.name.trim() }); }
+    else { actions.addExpenseCategory({ name: formData.name.trim() }); }
+    setShowModal(false);
+    setEditingCategory(null);
+    setFormData({ name: '' });
+  };
+  
+  const handleDelete = async (cat) => {
+    const count = expenses.filter(e => e.categoryId === cat.id).length;
+    const ok = await confirm({
+      title: t('deleteExpenseCategory', language),
+      message: count > 0
+        ? `${t('confirmDelete', language)} ${t('deleteExpenseCategoryWarning', language)} (${count} ${t('expensesInCategory', language)})`
+        : t('confirmDelete', language),
+      confirmLabel: t('delete', language),
+      danger: true,
+    });
+    if (ok) actions.deleteExpenseCategory(cat.id);
+  };
+  
+  return (
+    <div className="p-6">
+      <div className="flex items-center justify-between mb-6">
+        <h1 className="text-2xl font-display font-bold text-dark-roast flex items-center gap-3">
+          <Tags className="w-7 h-7" />
+          {t('expenseCategories', language)}
+        </h1>
+        <button onClick={() => { setEditingCategory(null); setFormData({ name: '' }); setShowModal(true); }} className="flex items-center gap-2 px-4 py-2 bg-accent text-white rounded-xl hover:bg-accent/90">
+          <Plus className="w-5 h-5" /> {t('addExpenseCategory', language)}
+        </button>
+      </div>
+      
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+        {expenseCategories.map(cat => {
+          const catExpenses = expenses.filter(e => e.categoryId === cat.id);
+          const catTotal = catExpenses.reduce((sum, e) => sum + e.amount, 0);
+          return (
+            <div key={cat.id} className="bg-white rounded-2xl p-4 shadow-sm">
+              <div className="flex items-center justify-between mb-3">
+                <div className="w-12 h-12 bg-error/10 rounded-xl flex items-center justify-center">
+                  <Wallet className="w-6 h-6 text-error" />
+                </div>
+                <div className="flex gap-1">
+                  <button onClick={() => { setEditingCategory(cat); setFormData({ name: cat.name }); setShowModal(true); }} className="p-1.5 hover:bg-latte/20 rounded-lg"><Edit className="w-4 h-4" /></button>
+                  <button onClick={() => handleDelete(cat)} className="p-1.5 hover:bg-error/10 rounded-lg"><Trash2 className="w-4 h-4 text-error" /></button>
+                </div>
+              </div>
+              <h3 className="font-semibold text-dark-roast">{cat.name}</h3>
+              <p className="text-sm text-medium-roast">{catExpenses.length} {t('expensesInCategory', language)}</p>
+              <p className="text-sm font-mono font-semibold text-error mt-1">{formatPrice(catTotal)}</p>
+            </div>
+          );
+        })}
+      </div>
+      
+      <AnimatePresence>{showModal && (
+        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={() => setShowModal(false)}>
+          <motion.div initial={{ scale: 0.95 }} animate={{ scale: 1 }} exit={{ scale: 0.95 }} className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6" onClick={e => e.stopPropagation()}>
+            <h2 className="text-xl font-display font-bold mb-6">{editingCategory ? t('editExpenseCategory', language) : t('addExpenseCategory', language)}</h2>
+            <div>
+              <label className="block text-sm font-medium text-medium-roast mb-2">{t('categoryName', language)}</label>
+              <input type="text" value={formData.name} onChange={e => setFormData({ name: e.target.value })} onKeyDown={e => e.key === 'Enter' && handleSubmit()} className="w-full px-4 py-3 bg-cream border border-latte/30 rounded-xl focus:outline-none focus:border-accent" autoFocus />
+            </div>
+            <div className="flex gap-3 mt-6">
+              <button onClick={() => setShowModal(false)} className="flex-1 py-3 bg-latte/10 rounded-xl font-medium">{t('cancel', language)}</button>
+              <button onClick={handleSubmit} disabled={!formData.name.trim()} className="flex-1 py-3 bg-accent text-white rounded-xl font-medium disabled:opacity-50">{t('save', language)}</button>
+            </div>
+          </motion.div>
+        </motion.div>
+      )}</AnimatePresence>
+    </div>
+  );
+}
+
+// Helper: timestamp -> value usable by <input type="datetime-local">
+function toDatetimeLocal(timestamp) {
+  const d = new Date(timestamp);
+  const pad = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+// ==================== EXPENSES VIEW ====================
+function ExpensesView({ language, state, actions }) {
+  const { expenses, expenseCategories } = state;
+  const confirm = useConfirm();
+  const [showModal, setShowModal] = useState(false);
+  const [editingExpense, setEditingExpense] = useState(null);
+  const [filterCategory, setFilterCategory] = useState('all');
+  const [filterRange, setFilterRange] = useState('month');
+  const [formData, setFormData] = useState({ description: '', categoryId: '', amount: '', date: toDatetimeLocal(Date.now()) });
+  
+  const openAddModal = () => {
+    setEditingExpense(null);
+    setFormData({ description: '', categoryId: expenseCategories[0]?.id || '', amount: '', date: toDatetimeLocal(Date.now()) });
+    setShowModal(true);
+  };
+  
+  const openEditModal = (expense) => {
+    setEditingExpense(expense);
+    setFormData({
+      description: expense.description || '',
+      categoryId: expense.categoryId,
+      amount: (expense.amount / 100).toString(),
+      date: toDatetimeLocal(expense.date),
+    });
+    setShowModal(true);
+  };
+  
+  const handleSubmit = () => {
+    const amountInCents = Math.round(parseFloat(formData.amount) * 100);
+    if (!formData.categoryId || !amountInCents || amountInCents <= 0 || !formData.date) return;
+    const payload = {
+      description: formData.description.trim(),
+      categoryId: formData.categoryId,
+      amount: amountInCents,
+      date: new Date(formData.date).getTime(),
+    };
+    if (editingExpense) { actions.updateExpense(editingExpense.id, payload); }
+    else { actions.addExpense(payload); }
+    setShowModal(false);
+    setEditingExpense(null);
+  };
+  
+  const handleDelete = async (expense) => {
+    const ok = await confirm({
+      title: t('deleteExpense', language),
+      message: t('confirmDelete', language),
+      confirmLabel: t('delete', language),
+      danger: true,
+    });
+    if (ok) actions.deleteExpense(expense.id);
+  };
+  
+  const getRangeStart = () => {
+    const now = new Date();
+    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    const day = 24 * 60 * 60 * 1000;
+    if (filterRange === 'today') return startOfToday;
+    if (filterRange === 'week') return startOfToday - 6 * day;
+    if (filterRange === 'month') return startOfToday - 29 * day;
+    return 0; // all
+  };
+  
+  const rangeStart = getRangeStart();
+  const categoryName = (id) => expenseCategories.find(c => c.id === id)?.name || '—';
+  
+  const filteredExpenses = expenses
+    .filter(e => (filterCategory === 'all' || e.categoryId === filterCategory) && e.date >= rangeStart)
+    .sort((a, b) => b.date - a.date);
+  const filteredTotal = filteredExpenses.reduce((sum, e) => sum + e.amount, 0);
+  
+  return (
+    <div className="p-6">
+      <div className="flex items-center justify-between mb-6">
+        <h1 className="text-2xl font-display font-bold text-dark-roast flex items-center gap-3">
+          <Wallet className="w-7 h-7" />
+          {t('expenses', language)}
+        </h1>
+        <button onClick={openAddModal} className="flex items-center gap-2 px-4 py-2 bg-accent text-white rounded-xl hover:bg-accent/90">
+          <Plus className="w-5 h-5" /> {t('addExpense', language)}
+        </button>
+      </div>
+      
+      {/* Filters */}
+      <div className="bg-white rounded-2xl p-4 shadow-sm mb-6">
+        <div className="flex flex-col md:flex-row gap-4">
+          <select value={filterCategory} onChange={e => setFilterCategory(e.target.value)} className="px-4 py-3 bg-cream border border-latte/30 rounded-xl focus:outline-none focus:border-accent">
+            <option value="all">All Categories</option>
+            {expenseCategories.map(cat => (<option key={cat.id} value={cat.id}>{cat.name}</option>))}
+          </select>
+          <div className="flex flex-wrap gap-2">
+            {[
+              { id: 'today', label: t('today', language) },
+              { id: 'week', label: t('last7Days', language) },
+              { id: 'month', label: t('last30Days', language) },
+              { id: 'all', label: 'All' },
+            ].map(opt => (
+              <button key={opt.id} onClick={() => setFilterRange(opt.id)} className={`px-4 py-2 rounded-xl font-medium ${filterRange === opt.id ? 'bg-espresso text-white' : 'bg-cream'}`}>{opt.label}</button>
+            ))}
+          </div>
+        </div>
+      </div>
+      
+      {/* Summary */}
+      <div className="grid grid-cols-2 gap-4 mb-6">
+        <div className="bg-white rounded-xl p-4 shadow-sm">
+          <p className="text-sm text-medium-roast mb-1">{t('totalExpenses', language)}</p>
+          <p className="text-2xl font-mono font-bold text-error">{formatPrice(filteredTotal)}</p>
+        </div>
+        <div className="bg-white rounded-xl p-4 shadow-sm">
+          <p className="text-sm text-medium-roast mb-1">{t('expenses', language)}</p>
+          <p className="text-2xl font-mono font-bold text-espresso">{filteredExpenses.length}</p>
+        </div>
+      </div>
+      
+      {/* Expense list */}
+      <div className="bg-white rounded-2xl shadow-sm overflow-hidden">
+        {filteredExpenses.length === 0 ? (
+          <p className="text-medium-roast text-center py-12">{t('noExpenses', language)}</p>
+        ) : (
+          <table className="w-full">
+            <thead className="bg-cream">
+              <tr>
+                <th className="px-6 py-4 text-left text-sm font-semibold">{t('expenseDate', language)}</th>
+                <th className="px-6 py-4 text-left text-sm font-semibold">{t('expenseCategory', language)}</th>
+                <th className="px-6 py-4 text-left text-sm font-semibold">{t('expenseDescription', language)}</th>
+                <th className="px-6 py-4 text-right text-sm font-semibold">{t('expenseAmount', language)}</th>
+                <th className="px-6 py-4 text-right text-sm font-semibold">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredExpenses.map(expense => (
+                <tr key={expense.id} className="border-t border-latte/10 hover:bg-cream/50">
+                  <td className="px-6 py-4 text-sm text-medium-roast whitespace-nowrap">
+                    {new Date(expense.date).toLocaleDateString('en-MY', { day: '2-digit', month: 'short', year: 'numeric' })}
+                    <span className="text-latte"> · </span>
+                    {new Date(expense.date).toLocaleTimeString('en-MY', { hour: '2-digit', minute: '2-digit' })}
+                  </td>
+                  <td className="px-6 py-4"><span className="px-3 py-1 rounded-full text-xs font-medium bg-error/10 text-error whitespace-nowrap">{categoryName(expense.categoryId)}</span></td>
+                  <td className="px-6 py-4">
+                    <span className="font-medium">{expense.description || '—'}</span>
+                    {expense.createdBy && <span className="text-xs text-latte block">{expense.createdBy}</span>}
+                  </td>
+                  <td className="px-6 py-4 text-right font-mono font-semibold text-error">{formatPrice(expense.amount)}</td>
+                  <td className="px-6 py-4">
+                    <div className="flex justify-end gap-2">
+                      <button onClick={() => openEditModal(expense)} className="p-2 hover:bg-latte/20 rounded-lg"><Edit className="w-4 h-4 text-medium-roast" /></button>
+                      <button onClick={() => handleDelete(expense)} className="p-2 hover:bg-error/10 rounded-lg"><Trash2 className="w-4 h-4 text-error" /></button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+      
+      {/* Add/Edit Expense Modal */}
+      <AnimatePresence>{showModal && (
+        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={() => setShowModal(false)}>
+          <motion.div initial={{ scale: 0.95 }} animate={{ scale: 1 }} exit={{ scale: 0.95 }} className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6" onClick={e => e.stopPropagation()}>
+            <h2 className="text-xl font-display font-bold mb-6">{editingExpense ? t('editExpense', language) : t('addExpense', language)}</h2>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-medium-roast mb-2">{t('expenseCategory', language)} *</label>
+                <select value={formData.categoryId} onChange={e => setFormData({ ...formData, categoryId: e.target.value })} className="w-full px-4 py-3 bg-cream border border-latte/30 rounded-xl focus:outline-none focus:border-accent">
+                  {expenseCategories.length === 0 && <option value="">{t('noData', language)}</option>}
+                  {expenseCategories.map(cat => (<option key={cat.id} value={cat.id}>{cat.name}</option>))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-medium-roast mb-2">{t('expenseDescription', language)}</label>
+                <input type="text" value={formData.description} onChange={e => setFormData({ ...formData, description: e.target.value })} placeholder="e.g. Rice & cooking oil" className="w-full px-4 py-3 bg-cream border border-latte/30 rounded-xl focus:outline-none focus:border-accent" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-medium-roast mb-2">{t('expenseAmount', language)} (RM) *</label>
+                <input type="number" step="0.01" min="0" value={formData.amount} onChange={e => setFormData({ ...formData, amount: e.target.value })} placeholder="0.00" className="w-full px-4 py-3 bg-cream border border-latte/30 rounded-xl focus:outline-none focus:border-accent font-mono" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-medium-roast mb-2 flex items-center gap-2">
+                  <CalendarDays className="w-4 h-4" /> {t('expenseDate', language)} *
+                </label>
+                <input
+                  type="datetime-local"
+                  value={formData.date}
+                  onChange={e => setFormData({ ...formData, date: e.target.value })}
+                  className="w-full px-4 py-3 bg-cream border border-latte/30 rounded-xl focus:outline-none focus:border-accent font-mono"
+                />
+              </div>
+            </div>
+            <div className="flex gap-3 mt-6">
+              <button onClick={() => setShowModal(false)} className="flex-1 py-3 bg-latte/10 rounded-xl font-medium">{t('cancel', language)}</button>
+              <button
+                onClick={handleSubmit}
+                disabled={!formData.categoryId || !(parseFloat(formData.amount) > 0) || !formData.date}
+                className="flex-1 py-3 bg-accent text-white rounded-xl font-medium disabled:opacity-50"
+              >
+                {t('save', language)}
+              </button>
+            </div>
+          </motion.div>
+        </motion.div>
+      )}</AnimatePresence>
+    </div>
+  );
+}
+
+// ==================== PROFIT & LOSS VIEW ====================
+function ProfitLossView({ language, state }) {
+  const { orderHistory, expenses } = state;
+  const [dateRange, setDateRange] = useState('30d');
+  const [customRange, setCustomRange] = useState({ from: '', to: '' });
+  
+  const DAY = 24 * 60 * 60 * 1000;
+  const startOfToday = () => {
+    const now = new Date();
+    return new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  };
+  
+  // Inclusive [start, end) range in ms for the selected period
+  const getRange = () => {
+    const today = startOfToday();
+    if (dateRange === 'today') return [today, Date.now() + 1];
+    if (dateRange === 'yesterday') return [today - DAY, today];
+    if (dateRange === '7d') return [today - 6 * DAY, Date.now() + 1];
+    if (dateRange === '30d') return [today - 29 * DAY, Date.now() + 1];
+    if (dateRange === 'custom' && customRange.from && customRange.to) {
+      const from = new Date(customRange.from + 'T00:00:00').getTime();
+      const to = new Date(customRange.to + 'T23:59:59').getTime() + 1;
+      return [from, to];
+    }
+    return [today, Date.now() + 1];
+  };
+  
+  const [rangeStart, rangeEnd] = getRange();
+  
+  const paidOrders = orderHistory.filter(o => o.status === 'paid' && o.paidAt >= rangeStart && o.paidAt < rangeEnd);
+  const rangeExpenses = expenses.filter(e => e.date >= rangeStart && e.date < rangeEnd);
+  
+  const totalSales = paidOrders.reduce((sum, o) => sum + o.total, 0);
+  const totalExpenses = rangeExpenses.reduce((sum, e) => sum + e.amount, 0);
+  const net = totalSales - totalExpenses;
+  const margin = totalSales > 0 ? (net / totalSales) * 100 : null;
+  
+  // Daily buckets across the range (capped so huge custom ranges stay readable)
+  const dayKeys = [];
+  const firstDay = new Date(rangeStart);
+  firstDay.setHours(0, 0, 0, 0);
+  for (let ts = firstDay.getTime(); ts < rangeEnd && dayKeys.length < 92; ts += DAY) {
+    dayKeys.push(ts);
+  }
+  
+  const daily = dayKeys.map(dayStart => {
+    const dayEnd = dayStart + DAY;
+    const sales = paidOrders.filter(o => o.paidAt >= dayStart && o.paidAt < dayEnd).reduce((s, o) => s + o.total, 0);
+    const dayExpenses = rangeExpenses.filter(e => e.date >= dayStart && e.date < dayEnd).reduce((s, e) => s + e.amount, 0);
+    return { dayStart, sales, expenses: dayExpenses };
+  });
+  
+  const maxDaily = Math.max(...daily.map(d => Math.max(d.sales, d.expenses)), 1);
+  
+  // Expenses grouped by category
+  const byCategory = state.expenseCategories
+    .map(cat => ({
+      name: cat.name,
+      total: rangeExpenses.filter(e => e.categoryId === cat.id).reduce((s, e) => s + e.amount, 0),
+    }))
+    .filter(c => c.total > 0)
+    .sort((a, b) => b.total - a.total);
+  const maxCategory = Math.max(...byCategory.map(c => c.total), 1);
+  
+  // Insights
+  const bestSalesDay = daily.reduce((best, d) => (d.sales > (best?.sales || 0) ? d : best), null);
+  const worstExpenseDay = daily.reduce((worst, d) => (d.expenses > (worst?.expenses || 0) ? d : worst), null);
+  
+  const formatDay = (ts) => new Date(ts).toLocaleDateString('en-MY', { day: '2-digit', month: 'short' });
+  
+  const ranges = [
+    { id: 'today', label: t('today', language) },
+    { id: 'yesterday', label: t('yesterday', language) },
+    { id: '7d', label: t('last7Days', language) },
+    { id: '30d', label: t('last30Days', language) },
+    { id: 'custom', label: t('customRange', language) },
+  ];
+  
+  return (
+    <div className="p-6">
+      <div className="flex items-center justify-between mb-6">
+        <h1 className="text-2xl font-display font-bold text-dark-roast flex items-center gap-3">
+          <TrendingDown className="w-7 h-7" />
+          {t('profitAndLoss', language)}
+        </h1>
+      </div>
+      
+      {/* Date range selector */}
+      <div className="bg-white rounded-2xl p-4 shadow-sm mb-6">
+        <div className="flex flex-wrap items-center gap-2">
+          {ranges.map(opt => (
+            <button key={opt.id} onClick={() => setDateRange(opt.id)} className={`px-4 py-2 rounded-xl font-medium ${dateRange === opt.id ? 'bg-accent text-white' : 'bg-cream'}`}>{opt.label}</button>
+          ))}
+          {dateRange === 'custom' && (
+            <div className="flex items-center gap-2 ml-2">
+              <input type="date" value={customRange.from} onChange={e => setCustomRange({ ...customRange, from: e.target.value })} className="px-3 py-2 bg-cream border border-latte/30 rounded-lg" />
+              <span className="text-medium-roast text-sm">to</span>
+              <input type="date" value={customRange.to} onChange={e => setCustomRange({ ...customRange, to: e.target.value })} className="px-3 py-2 bg-cream border border-latte/30 rounded-lg" />
+            </div>
+          )}
+        </div>
+      </div>
+      
+      {/* KPI cards */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+        <div className="bg-white rounded-xl p-4 shadow-sm">
+          <p className="text-sm text-medium-roast mb-1">{t('totalSales', language)}</p>
+          <p className="text-2xl font-mono font-bold text-success">{formatPrice(totalSales)}</p>
+          <p className="text-xs text-medium-roast mt-1">{paidOrders.length} {t('totalOrders', language).toLowerCase()}</p>
+        </div>
+        <div className="bg-white rounded-xl p-4 shadow-sm">
+          <p className="text-sm text-medium-roast mb-1">{t('totalExpenses', language)}</p>
+          <p className="text-2xl font-mono font-bold text-error">{formatPrice(totalExpenses)}</p>
+          <p className="text-xs text-medium-roast mt-1">{rangeExpenses.length} {t('expensesInCategory', language)}</p>
+        </div>
+        <div className="bg-white rounded-xl p-4 shadow-sm">
+          <p className="text-sm text-medium-roast mb-1">{net >= 0 ? t('netProfit', language) : t('netLoss', language)}</p>
+          <p className={`text-2xl font-mono font-bold ${net >= 0 ? 'text-success' : 'text-error'}`}>
+            {net >= 0 ? '+' : '−'}{formatPrice(Math.abs(net))}
+          </p>
+        </div>
+        <div className="bg-white rounded-xl p-4 shadow-sm">
+          <p className="text-sm text-medium-roast mb-1">{t('profitMargin', language)}</p>
+          <p className="text-2xl font-mono font-bold text-espresso">{margin === null ? '—' : `${margin.toFixed(1)}%`}</p>
+        </div>
+      </div>
+      
+      {/* Insights */}
+      {(bestSalesDay?.sales > 0 || worstExpenseDay?.expenses > 0) && (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+          {bestSalesDay?.sales > 0 && (
+            <div className="bg-success/10 border border-success/30 rounded-xl p-4 flex items-center gap-3">
+              <TrendingUp className="w-6 h-6 text-success shrink-0" />
+              <p className="text-sm text-dark-roast">
+                <span className="font-semibold">{t('bestSalesDay', language)}:</span>{' '}
+                {formatDay(bestSalesDay.dayStart)} · <span className="font-mono font-semibold">{formatPrice(bestSalesDay.sales)}</span>
+              </p>
+            </div>
+          )}
+          {worstExpenseDay?.expenses > 0 && (
+            <div className="bg-error/10 border border-error/30 rounded-xl p-4 flex items-center gap-3">
+              <TrendingDown className="w-6 h-6 text-error shrink-0" />
+              <p className="text-sm text-dark-roast">
+                <span className="font-semibold">{t('highestExpenseDay', language)}:</span>{' '}
+                {formatDay(worstExpenseDay.dayStart)} · <span className="font-mono font-semibold">{formatPrice(worstExpenseDay.expenses)}</span>
+              </p>
+            </div>
+          )}
+        </div>
+      )}
+      
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Sales vs Expenses per day */}
+        <div className="bg-white rounded-2xl p-6 shadow-sm">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="font-semibold text-dark-roast">{t('salesVsExpenses', language)}</h2>
+            <div className="flex items-center gap-3 text-xs text-medium-roast">
+              <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-accent inline-block" /> {t('salesLegend', language)}</span>
+              <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-error inline-block" /> {t('expensesLegend', language)}</span>
+            </div>
+          </div>
+          {totalSales === 0 && totalExpenses === 0 ? (
+            <p className="text-medium-roast text-center py-12">{t('noData', language)}</p>
+          ) : (
+            <div className="h-52 flex items-end gap-1 overflow-x-auto">
+              {daily.map((d, index) => (
+                <div key={d.dayStart} className="flex-1 min-w-[14px] flex flex-col items-center gap-1">
+                  <div className="w-full flex items-end justify-center gap-0.5 h-40">
+                    <motion.div
+                      initial={{ height: 0 }}
+                      animate={{ height: `${(d.sales / maxDaily) * 100}%` }}
+                      transition={{ delay: index * 0.02 }}
+                      className="w-1/2 max-w-[14px] bg-accent rounded-t-sm min-h-[2px]"
+                      title={`${formatDay(d.dayStart)} — ${t('salesLegend', language)}: ${formatPrice(d.sales)}`}
+                    />
+                    <motion.div
+                      initial={{ height: 0 }}
+                      animate={{ height: `${(d.expenses / maxDaily) * 100}%` }}
+                      transition={{ delay: index * 0.02 }}
+                      className="w-1/2 max-w-[14px] bg-error rounded-t-sm min-h-[2px]"
+                      title={`${formatDay(d.dayStart)} — ${t('expensesLegend', language)}: ${formatPrice(d.expenses)}`}
+                    />
+                  </div>
+                  {daily.length <= 15 && (
+                    <span className="text-[9px] text-medium-roast whitespace-nowrap">{formatDay(d.dayStart)}</span>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+        
+        {/* Expenses by category */}
+        <div className="bg-white rounded-2xl p-6 shadow-sm">
+          <h2 className="font-semibold text-dark-roast mb-4">{t('expensesByCategory', language)}</h2>
+          {byCategory.length === 0 ? (
+            <p className="text-medium-roast text-center py-12">{t('noData', language)}</p>
+          ) : (
+            <div className="space-y-3">
+              {byCategory.map(cat => (
+                <div key={cat.name}>
+                  <div className="flex items-center justify-between text-sm mb-1">
+                    <span className="font-medium text-dark-roast">{cat.name}</span>
+                    <span className="font-mono font-semibold text-error">{formatPrice(cat.total)}</span>
+                  </div>
+                  <div className="w-full h-2.5 bg-cream rounded-full overflow-hidden">
+                    <motion.div
+                      initial={{ width: 0 }}
+                      animate={{ width: `${(cat.total / maxCategory) * 100}%` }}
+                      className="h-full bg-error/80 rounded-full"
+                    />
+                  </div>
+                  <p className="text-xs text-medium-roast mt-0.5">{totalExpenses > 0 ? ((cat.total / totalExpenses) * 100).toFixed(1) : 0}% of {t('totalExpenses', language).toLowerCase()}</p>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </div>
     </div>
