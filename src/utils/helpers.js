@@ -1,4 +1,4 @@
-import { TAX_RATE } from '../data/menuData';
+import { TAX_RATE } from '../data/menuData.js';
 
 // Format price from cents to display string
 export const formatPrice = (cents, currency = 'RM') => {

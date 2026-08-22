@@ -10,6 +10,9 @@ import {
   mockUpdateStoreMember,
   mockRemoveStoreMember,
   mockCreateMember,
+  mockGetStoreBySlug,
+  mockGetStoreRoster,
+  mockPinLogin,
 } from './cloudMock';
 
 // Cloud mode is enabled only when Supabase credentials are provided via env.
@@ -52,6 +55,9 @@ export function buildAppUser(authUser, membership) {
     // Memberships are returned with their store id under `id` (listMyStores) or
     // `storeId` (raw store_members rows). Accept both.
     storeId: membership?.storeId || membership?.id || null,
+    // Store link slug (…/mycafe) — used to send the device back to the store's
+    // PIN screen after logout.
+    storeSlug: membership?.slug || membership?.storeSlug || null,
   };
 }
 
@@ -105,7 +111,9 @@ export const cloudAuth = {
   },
 
   // Owner sign-up step 2: call the SQL `register_store()` RPC, then return the
-  // new store. The mock does the equivalent in localStorage.
+  // new store. The RPC returns { id, slug } — the slug is the store's public
+  // link (…/mycafe) that staff use to sign in with their PIN. The mock does
+  // the equivalent in localStorage.
   async registerStore({ storeName, displayName }) {
     if (!isCloudEnabled) {
       return mockRegisterStore({ storeName, displayName });
@@ -115,7 +123,7 @@ export const cloudAuth = {
       p_display_name: displayName || '',
     });
     if (error) return { data: null, error };
-    return { data: { store: { id: data, name: storeName } }, error: null };
+    return { data: { store: { id: data.id, name: storeName, slug: data.slug } }, error: null };
   },
 
   // Stores the signed-in user is an active member of, with membership role.
@@ -124,7 +132,7 @@ export const cloudAuth = {
     const { data, error } = await supabase
       .from('store_members')
       .select(
-        'store_id, role, display_name, pin, active, stores(id, name, currency, tax_rate)'
+        'store_id, role, display_name, pin, active, stores(id, name, slug, currency, tax_rate)'
       );
     if (error) return { data: [], error };
 
@@ -133,12 +141,87 @@ export const cloudAuth = {
       .map((m) => ({
         id: m.store_id,
         name: m.stores.name,
+        slug: m.stores.slug || '',
         currency: m.stores.currency,
         taxRate: m.stores.tax_rate,
         role: m.role,
         displayName: m.display_name || '',
       }));
     return { data: stores, error: null };
+  },
+
+  // ---- Public store-link login (the /mycafe flow) ----
+  // These mirror the anon RPCs in supabase/schema.sql and fall back to the
+  // in-browser mock so the flow can be demoed without Supabase.
+
+  // Resolve a store link to { id, name, slug }. No authentication needed.
+  async getStoreBySlug(slug) {
+    if (!isCloudEnabled) return mockGetStoreBySlug(slug);
+    const { data, error } = await supabase.rpc('get_store_by_slug', { p_slug: slug });
+    if (error) return { data: null, error };
+    return { data: data || null, error: null };
+  },
+
+  // Active staff of a store that have a PIN, as { id, name, role } records
+  // for the store login screen's user picker.
+  async getStoreRoster(slug) {
+    if (!isCloudEnabled) return mockGetStoreRoster(slug);
+    const { data, error } = await supabase.rpc('store_roster', { p_slug: slug });
+    if (error) return { data: [], error };
+    return {
+      data: (data || []).map((m) => ({
+        id: m.profile_id,
+        name: m.display_name || '',
+        role: m.role,
+      })),
+      error: null,
+    };
+  },
+
+  // Staff PIN sign-in for a store link: verify the PIN server-side (with
+  // brute-force lockout), then exchange the returned email + the PIN itself
+  // for a real Supabase session and resolve the membership.
+  // Returns { data: { user, membership }, error } on success; on failure
+  // error.reason is 'invalid' | 'locked' | 'not_found'.
+  async pinLogin({ slug, profileId, pin }) {
+    if (!isCloudEnabled) return mockPinLogin({ slug, profileId, pin });
+
+    const { data: check, error: verifyError } = await supabase.rpc('verify_pin', {
+      p_slug: slug,
+      p_profile_id: profileId,
+      p_pin: pin,
+    });
+    if (verifyError) return { data: null, error: { message: verifyError.message, reason: 'invalid' } };
+    if (!check?.ok) {
+      return {
+        data: null,
+        error: { message: 'PIN check failed', reason: check?.reason || 'invalid' },
+      };
+    }
+
+    // The staff member's auth password IS their PIN (see api/provision-staff.js).
+    const { data: authData, error: signInError } = await supabase.auth.signInWithPassword({
+      email: check.email,
+      password: pin,
+    });
+    if (signInError || !authData?.user) {
+      return {
+        data: null,
+        error: { message: signInError?.message || 'Sign-in failed', reason: 'invalid' },
+      };
+    }
+
+    const { data: stores, error: storesError } = await cloudAuth.listMyStores();
+    if (storesError) return { data: null, error: { message: storesError.message, reason: 'invalid' } };
+    const want = String(slug).toLowerCase();
+    const membership =
+      (stores || []).find((s) => String(s.slug || '').toLowerCase() === want) || null;
+    if (!membership) {
+      await supabase.auth.signOut().catch(() => {});
+      return { data: null, error: { message: 'No membership in this store', reason: 'not_found' } };
+    }
+
+    return { data: { user: toAppUser(authData.user), membership }, error: null };
   },
 
   // Current Supabase session access token, or null when signed out / in mock mode.

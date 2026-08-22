@@ -7,15 +7,23 @@
 -- ============================================================
 
 -- ---------- Stores (tenants) ----------
+-- `slug` is the store's public link: respos-five.vercel.app/mycafe.
+-- Staff open it and sign in with just their 4-digit PIN.
 create table if not exists public.stores (
   id uuid primary key default gen_random_uuid(),
   name text not null,
+  slug text,
   currency text not null default 'RM',
   tax_rate numeric not null default 0.06,
   settings jsonb not null default '{}'::jsonb,
   created_by uuid references auth.users(id),
   created_at timestamptz not null default now()
 );
+
+-- Safe to re-run on existing installs: old stores get the column (NULL until
+-- the backfill below fills it). Multiple NULLs are allowed by the unique index.
+alter table public.stores add column if not exists slug text;
+create unique index if not exists idx_stores_slug on public.stores (slug);
 
 -- ---------- Profiles (one per authenticated user) ----------
 create table if not exists public.profiles (
@@ -39,6 +47,11 @@ create table if not exists public.store_members (
   created_at timestamptz not null default now(),
   primary key (store_id, profile_id)
 );
+
+-- PIN brute-force guard used by verify_pin(): after 5 wrong attempts the
+-- member is locked out for 5 minutes.
+alter table public.store_members add column if not exists failed_attempts int not null default 0;
+alter table public.store_members add column if not exists locked_until timestamptz;
 
 -- ---------- Menu ----------
 create table if not exists public.menu_categories (
@@ -155,14 +168,62 @@ language sql security definer stable set search_path = public as $$
 $$;
 
 -- ============================================================
+-- Store slugs: "My Café" → respos-five.vercel.app/my-cafe
+-- ============================================================
+
+-- Turn a store name into a URL-safe slug ("My Café!" → "my-caf"… see note:
+-- accents are dropped; pure names like "mycafe" stay "mycafe").
+create or replace function public.unique_store_slug(p_name text)
+returns text
+language plpgsql security definer set search_path = public as $$
+declare
+  base text;
+  candidate text;
+  n int := 2;
+begin
+  base := trim(both '-' from regexp_replace(lower(coalesce(p_name, '')), '[^a-z0-9]+', '-', 'g'));
+  if base = '' or base in (
+    'api', 'assets', 'docs', 'admin', 'login', 'settings', 'pos',
+    'tables', 'reports', 'index', 'sw', 'favicon-ico'
+  ) then
+    base := coalesce(nullif(base, ''), 'store') || '-store';
+  end if;
+
+  candidate := base;
+  while exists (select 1 from public.stores where slug = candidate) loop
+    candidate := base || '-' || n;
+    n := n + 1;
+  end loop;
+  return candidate;
+end;
+$$;
+
+-- Backfill: give every existing store a slug (idempotent — only NULL ones).
+do $$
+declare
+  r record;
+begin
+  for r in select id, name from public.stores where slug is null loop
+    update public.stores
+    set slug = public.unique_store_slug(r.name)
+    where id = r.id and slug is null;
+  end loop;
+end $$;
+
+-- ============================================================
 -- Sign-up flow: creates profile + store + admin membership.
 -- Called by the app right after Supabase Auth sign-up.
+-- Returns { id, slug } so the app can immediately show the owner
+-- their staff sign-in link (…/<slug>).
 -- ============================================================
+drop function if exists public.register_store(text, text);
+
 create or replace function public.register_store(p_store_name text, p_display_name text)
-returns uuid
+returns jsonb
 language plpgsql security definer set search_path = public as $$
 declare
   new_store_id uuid;
+  new_slug text;
 begin
   if auth.uid() is null then
     raise exception 'not authenticated';
@@ -173,18 +234,114 @@ begin
           (select email from auth.users where id = auth.uid()))
   on conflict (id) do update set display_name = excluded.display_name;
 
-  insert into public.stores (name, created_by)
-  values (p_store_name, auth.uid())
+  new_slug := public.unique_store_slug(p_store_name);
+
+  insert into public.stores (name, slug, created_by)
+  values (p_store_name, new_slug, auth.uid())
   returning id into new_store_id;
 
   insert into public.store_members (store_id, profile_id, role, display_name)
   values (new_store_id, auth.uid(), 'admin', coalesce(p_display_name, ''));
 
-  return new_store_id;
+  return jsonb_build_object('id', new_store_id, 'slug', new_slug);
 end;
 $$;
 
 grant execute on function public.register_store(text, text) to authenticated;
+
+-- ============================================================
+-- Public (anon) store + PIN login RPCs.
+--
+-- The /<slug> page must render before anyone is authenticated, so these
+-- functions are SECURITY DEFINER, expose only safe fields, and are granted
+-- to `anon`. They are the only public surface: everything else stays
+-- behind RLS.
+-- ============================================================
+
+-- Resolve a store link to its id/name/slug (null when unknown).
+create or replace function public.get_store_by_slug(p_slug text)
+returns jsonb
+language sql security definer stable set search_path = public as $$
+  select jsonb_build_object('id', s.id, 'name', s.name, 'slug', s.slug)
+  from public.stores s
+  where lower(s.slug) = lower(trim(p_slug))
+  limit 1
+$$;
+
+-- Active staff of a store (only members that actually have a PIN — the
+-- registering owner, who signs in with email/password, is excluded).
+create or replace function public.store_roster(p_slug text)
+returns table(profile_id uuid, display_name text, role text)
+language sql security definer stable set search_path = public as $$
+  select m.profile_id, m.display_name, m.role
+  from public.store_members m
+  join public.stores s on s.id = m.store_id
+  where lower(s.slug) = lower(trim(p_slug))
+    and m.active = true
+    and m.pin is not null
+    and m.pin <> ''
+  order by
+    case m.role when 'admin' then 1 when 'manager' then 2 else 3 end,
+    m.display_name
+$$;
+
+-- Verify a staff PIN against a store link. On success returns the member's
+-- auth email so the client can call supabase.auth.signInWithPassword
+-- (password = the same PIN) and get a real, RLS-scoped session.
+-- Locks the member for 5 minutes after 5 failed attempts.
+create or replace function public.verify_pin(p_slug text, p_profile_id uuid, p_pin text)
+returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare
+  sid uuid;
+  member record;
+  attempts int;
+begin
+  select id into sid from public.stores where lower(slug) = lower(trim(p_slug));
+  if sid is null then
+    return jsonb_build_object('ok', false, 'reason', 'not_found');
+  end if;
+
+  select m.pin, m.failed_attempts, m.locked_until, pr.email
+    into member
+  from public.store_members m
+  join public.profiles pr on pr.id = m.profile_id
+  where m.store_id = sid
+    and m.profile_id = p_profile_id
+    and m.active = true;
+
+  if not found then
+    return jsonb_build_object('ok', false, 'reason', 'not_found');
+  end if;
+
+  if member.locked_until is not null and member.locked_until > now() then
+    return jsonb_build_object('ok', false, 'reason', 'locked');
+  end if;
+
+  if member.pin is not null and member.pin = p_pin then
+    update public.store_members
+    set failed_attempts = 0, locked_until = null
+    where store_id = sid and profile_id = p_profile_id;
+
+    return jsonb_build_object('ok', true, 'email', member.email);
+  end if;
+
+  attempts := coalesce(member.failed_attempts, 0) + 1;
+  update public.store_members
+  set failed_attempts = attempts,
+      locked_until = case when attempts >= 5 then now() + interval '5 minutes' else locked_until end
+  where store_id = sid and profile_id = p_profile_id;
+
+  if attempts >= 5 then
+    return jsonb_build_object('ok', false, 'reason', 'locked');
+  end if;
+  return jsonb_build_object('ok', false, 'reason', 'invalid');
+end;
+$$;
+
+grant execute on function public.get_store_by_slug(text) to anon, authenticated;
+grant execute on function public.store_roster(text) to anon, authenticated;
+grant execute on function public.verify_pin(text, uuid, text) to anon, authenticated;
 
 -- ============================================================
 -- Row Level Security

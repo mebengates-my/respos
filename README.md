@@ -54,6 +54,15 @@ is scaffolded and the first online features are built:
   cloud session persists across refresh (key `cafe-pos-session-cloud`) and
   re-validates against the backend on load. Signing in as an owner puts you
   in the Admin/Manager panel; a server membership lands in the POS.
+- **Per-store login links (…/mycafe)** — creating a store generates a URL
+  slug (`My Café` → `/my-cafe`). Staff open that link, tap their name and
+  enter their 4-digit PIN — no emails, and never the owner's password.
+  Behind the scenes: public anon RPCs `get_store_by_slug` / `store_roster`
+  render the page, `verify_pin` checks the PIN server-side (with a
+  5-attempt / 5-minute lockout) and hands back the staff member's generated
+  email, which the client turns into a real Supabase session. `vercel.json`
+  rewrites store links to the SPA, and logout returns the device to the same
+  store's PIN screen.
 - **Staff provisioning route** (`api/provision-staff.js`) — a Vercel
   serverless function that uses the **service-role key** (server-only env)
   to create a Supabase Auth user (generated email + 4-digit PIN as password)

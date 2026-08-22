@@ -41,15 +41,33 @@ Vercel (React app, from GitHub)          Supabase
 ## Sign-up & staff flow (how tenancy works)
 
 1. Owner signs up with email/password (Supabase Auth) → app calls
-   `register_store('My Café', 'Owner Name')` → creates `stores` +
-   `store_members` (role `admin`) rows.
+   `register_store('My Café', 'Owner Name')` → creates `stores` (with a URL
+   **slug**) + `store_members` (role `admin`) rows. The app then shows the
+   owner their staff sign-in link, e.g. `respos-five.vercel.app/my-cafe`.
 2. Admin creates managers/servers. Staff accounts are Supabase Auth users
    with a generated email (e.g. `mycafe-server-ab12@staff.internal`) and the
    4-digit PIN as password, so RLS applies to them too. Creating auth users
    requires the **service role key**, which must only ever live in a
    **server-side Vercel API route** (never in the browser).
-3. Staff "PIN login" on any device = `supabase.auth.signInWithPassword`
-   with their generated email + PIN; the app then loads their store.
+3. Staff never touch an email. They open the store link
+   (`respos-five.vercel.app/mycafe`), tap their name on the roster and enter
+   their 4-digit PIN:
+   - `get_store_by_slug(slug)` / `store_roster(slug)` — public anon RPCs that
+     render the store's PIN screen (roster shows only members that have a PIN;
+     the owner is not listed).
+   - `verify_pin(slug, profile_id, pin)` — verifies the PIN server-side with a
+     brute-force lockout (5 wrong tries → 5-minute lock) and returns the
+     member's generated email. The client then calls
+     `supabase.auth.signInWithPassword(email, pin)` to get a real,
+     RLS-scoped session. The owner's email/password is never shared with staff.
+4. `vercel.json` rewrites every non-file path (e.g. `/mycafe`) to the SPA, so
+   store links work directly on Vercel. After logout the device returns to
+   the same store's PIN screen, ready for the next staff member.
+
+Slug rules: lowercased store name with non-alphanumerics collapsed to `-`
+("My Café" → `my-cafe`, "mycafe" → `mycafe`); collisions get a `-2`, `-3`…
+suffix; reserved words (`api`, `admin`, …) are rejected. Existing stores are
+backfilled with a slug when the schema is re-run.
 
 ## Realtime (live open orders)
 

@@ -1,5 +1,6 @@
-import React from 'react';
+import React, { useSyncExternalStore } from 'react';
 import { AppProvider, useApp } from './context/AppContext';
+import { subscribe, getPath, slugFromPath } from './utils/router';
 import Header from './components/Header';
 import MenuPanel from './components/MenuPanel';
 import OrderPanel from './components/OrderPanel';
@@ -9,6 +10,7 @@ import TableView from './components/TableView';
 import Reports from './components/Reports';
 import Settings from './components/Settings';
 import Login from './components/Login';
+import StoreLogin from './components/StoreLogin';
 import AdminPanel from './components/AdminPanel';
 import ToastContainer from './components/Toast';
 import { ConfirmProvider } from './components/ConfirmDialog';
@@ -32,10 +34,15 @@ function POSView() {
 function MainContent() {
   const { state } = useApp();
   const { isLoggedIn, currentUser, view } = state;
-  
+
+  // Store-link routing: /mycafe shows that store's PIN login when nobody is
+  // signed in. Once logged in the app takes over the full screen.
+  const path = useSyncExternalStore(subscribe, getPath);
+  const storeSlug = slugFromPath(path);
+
   // Not logged in - show login screen
   if (!isLoggedIn) {
-    return <Login />;
+    return storeSlug ? <StoreLogin slug={storeSlug} /> : <Login />;
   }
   
   const canManage = currentUser?.role === 'admin' || currentUser?.role === 'manager';
