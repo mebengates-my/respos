@@ -1,6 +1,7 @@
 import React from 'react';
 import { useApp } from '../context/AppContext';
 import { t } from '../data/language';
+import { useConfirm } from './ConfirmDialog';
 import {
   Coffee,
   Wifi,
@@ -17,9 +18,22 @@ import {
 
 export default function Header() {
   const { state, actions } = useApp();
+  const confirm = useConfirm();
   const { currentUser, view, language, isOffline } = state;
   
   const isAdmin = currentUser?.role === 'admin';
+  
+  const handleLogout = async () => {
+    const ok = await confirm({
+      title: 'Logout?',
+      message: 'You will need to enter your PIN again to sign back in.',
+      confirmLabel: 'Logout',
+      danger: true,
+    });
+    if (ok) {
+      actions.logout();
+    }
+  };
   
   return (
     <header className="bg-espresso text-white px-4 py-3 flex items-center justify-between shadow-lg">
@@ -102,11 +116,7 @@ export default function Header() {
         
         {/* Logout */}
         <button
-          onClick={() => {
-            if (confirm('Logout?')) {
-              actions.logout();
-            }
-          }}
+          onClick={handleLogout}
           className="p-2 hover:bg-error/20 rounded-lg transition-colors"
           title={t('logout', language)}
         >
