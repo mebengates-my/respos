@@ -27,6 +27,7 @@ export const translations = {
     logout: 'Logout',
     selectRole: 'Select Role',
     admin: 'Admin',
+    manager: 'Manager',
     server: 'Server',
     pin: 'PIN',
     enterPin: 'Enter PIN',
@@ -37,6 +38,7 @@ export const translations = {
     tables: 'Tables',
     reports: 'Reports',
     adminPanel: 'Admin Panel',
+    managerPanel: 'Manager Panel',
     settings: 'Settings',
     
     // Menu
@@ -93,6 +95,7 @@ export const translations = {
     change: 'Change',
     completePayment: 'Complete Payment',
     paymentSuccess: 'Payment Successful!',
+    serverNoPayment: 'Servers can only take orders. Payments are handled by an Admin or Manager.',
     
     // Reports
     salesReport: 'Sales Report',
@@ -166,6 +169,10 @@ export const translations = {
     tableManagement: 'Table Management',
     menuManagement: 'Menu Management',
     reportManagement: 'Report Management',
+    openOrders: 'Open Orders',
+    noOpenOrders: 'No open orders right now',
+    activeNow: 'Active now',
+    liveView: 'Live view of every unpaid order',
   },
   
   bn: {
@@ -195,6 +202,7 @@ export const translations = {
     logout: 'লগআউট',
     selectRole: 'ভূমিকা নির্বাচন',
     admin: 'অ্যাডমিন',
+    manager: 'ম্যানেজার',
     server: 'সার্ভার',
     pin: 'পিন',
     enterPin: 'পিন দিন',
@@ -205,6 +213,7 @@ export const translations = {
     tables: 'টেবিল',
     reports: 'রিপোর্ট',
     adminPanel: 'অ্যাডমিন প্যানেল',
+    managerPanel: 'ম্যানেজার প্যানেল',
     settings: 'সেটিংস',
     
     // Menu
@@ -261,6 +270,7 @@ export const translations = {
     change: 'পরিবর্তন',
     completePayment: 'পেমেন্ট সম্পন্ন',
     paymentSuccess: 'পেমেন্ট সফল!',
+    serverNoPayment: 'সার্ভাররা শুধু অর্ডার নিতে পারেন। পেমেন্ট অ্যাডমিন বা ম্যানেজার করেন।',
     
     // Reports
     salesReport: 'বিক্রয় রিপোর্ট',
@@ -334,6 +344,10 @@ export const translations = {
     tableManagement: 'টেবিল ব্যবস্থাপনা',
     menuManagement: 'মেনু ব্যবস্থাপনা',
     reportManagement: 'রিপোর্ট ব্যবস্থাপনা',
+    openOrders: 'খোলা অর্ডার',
+    noOpenOrders: 'এখন কোনো খোলা অর্ডার নেই',
+    activeNow: 'এখন সক্রিয়',
+    liveView: 'সব অবিশোধিত অর্ডারের লাইভ ভিউ',
   }
 };
 

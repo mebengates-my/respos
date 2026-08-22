@@ -2,6 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
 import { t } from '../data/language';
 import { loadStoreSettings, saveStoreSettings } from '../data/storeSettings';
+import { downloadSalesReportPdf } from '../utils/pdfReport';
+import { formatElapsedTime } from '../utils/helpers';
 import { useConfirm } from './ConfirmDialog';
 import {
   LayoutDashboard,
@@ -29,12 +31,16 @@ import {
   Printer,
   Save,
   RefreshCw,
-  LayoutGrid
+  LayoutGrid,
+  ClipboardList,
+  Pause,
+  ShoppingCart
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 const AdminViews = {
   DASHBOARD: 'dashboard',
+  OPEN_ORDERS: 'open_orders',
   USERS: 'users',
   CATEGORIES: 'categories',
   MENU_ITEMS: 'menu_items',
@@ -43,22 +49,27 @@ const AdminViews = {
   SETTINGS: 'settings'
 };
 
+// Managers get the same operational views as admins except user management and settings.
+const MANAGER_HIDDEN_VIEWS = [AdminViews.USERS, AdminViews.SETTINGS];
+
 export default function AdminPanel() {
   const { state, actions } = useApp();
   const confirm = useConfirm();
-  const { language, users, categories, tables, menuItems, orderHistory } = state;
-  // Start every admin session on the operational overview rather than Settings.
+  const { language, users, categories, tables, menuItems, orderHistory, currentUser } = state;
+  const isManager = currentUser?.role === 'manager';
+  // Start every management session on the operational overview rather than Settings.
   const [currentView, setCurrentView] = useState(AdminViews.DASHBOARD);
   
   const navItems = [
     { id: AdminViews.DASHBOARD, icon: LayoutDashboard, label: t('dashboard', language) },
+    { id: AdminViews.OPEN_ORDERS, icon: ClipboardList, label: t('openOrders', language) },
     { id: AdminViews.USERS, icon: Users, label: t('userManagement', language) },
     { id: AdminViews.CATEGORIES, icon: Coffee, label: t('categoryManagement', language) },
     { id: AdminViews.MENU_ITEMS, icon: Coffee, label: t('menuItems', language) },
     { id: AdminViews.TABLES, icon: Grid3X3, label: t('tableManagement', language) },
     { id: AdminViews.REPORTS, icon: FileText, label: t('reportManagement', language) },
     { id: AdminViews.SETTINGS, icon: Settings, label: t('settings', language) },
-  ];
+  ].filter(item => !(isManager && MANAGER_HIDDEN_VIEWS.includes(item.id)));
   
   const handleLogout = async () => {
     const ok = await confirm({
@@ -82,8 +93,12 @@ export default function AdminPanel() {
               <Coffee className="w-5 h-5 text-white" />
             </div>
             <div>
-              <h1 className="font-display font-bold">{t('adminPanel', language)}</h1>
-              <p className="text-xs text-latte">{state.currentUser?.name}</p>
+              <h1 className="font-display font-bold">
+                {isManager ? t('managerPanel', language) : t('adminPanel', language)}
+              </h1>
+              <p className="text-xs text-latte">
+                {currentUser?.name} · {t(currentUser?.role, language)}
+              </p>
             </div>
           </div>
         </div>
@@ -135,12 +150,13 @@ export default function AdminPanel() {
       {/* Main Content */}
       <main className="flex-1 overflow-auto">
         {currentView === AdminViews.DASHBOARD && <DashboardView language={language} state={state} />}
-        {currentView === AdminViews.USERS && <UsersView language={language} state={state} actions={actions} />}
+        {currentView === AdminViews.OPEN_ORDERS && <OpenOrdersView language={language} state={state} />}
+        {currentView === AdminViews.USERS && !isManager && <UsersView language={language} state={state} actions={actions} />}
         {currentView === AdminViews.CATEGORIES && <CategoriesView language={language} state={state} actions={actions} />}
         {currentView === AdminViews.MENU_ITEMS && <MenuItemsView language={language} state={state} actions={actions} />}
         {currentView === AdminViews.TABLES && <TablesView language={language} state={state} actions={actions} />}
         {currentView === AdminViews.REPORTS && <ReportsView language={language} state={state} actions={actions} />}
-        {currentView === AdminViews.SETTINGS && <StoreSettingsView language={language} state={state} actions={actions} />}
+        {currentView === AdminViews.SETTINGS && !isManager && <StoreSettingsView language={language} state={state} actions={actions} />}
       </main>
     </div>
   );
@@ -178,6 +194,133 @@ function DashboardView({ language, state }) {
   );
 }
 
+// Open Orders View — live board of every unpaid order (active + held)
+function OpenOrdersView({ language, state }) {
+  const { currentOrder, heldOrders, tables } = state;
+  const [, setTick] = useState(0);
+
+  // Re-render periodically so the "time open" counters stay fresh. Order data itself
+  // updates in real time through the shared app state (and cross-tab storage sync).
+  useEffect(() => {
+    const id = setInterval(() => setTick(v => v + 1), 15000);
+    return () => clearInterval(id);
+  }, []);
+
+  const tableLabel = (tableId) => {
+    if (!tableId || tableId === 'COUNTER') return t('counter', language);
+    const table = tables.find(tb => tb.id === tableId);
+    return table ? `${t('table', language)} ${table.number}` : tableId;
+  };
+
+  const openOrders = [];
+  if (currentOrder && currentOrder.items.length > 0) {
+    openOrders.push({ ...currentOrder, boardStatus: 'active' });
+  }
+  heldOrders.forEach(order => openOrders.push({ ...order, boardStatus: 'held' }));
+
+  // Occupied tables whose order is not otherwise visible on this device
+  const coveredTableIds = new Set(openOrders.map(o => o.tableId));
+  const orphanOccupiedTables = tables.filter(
+    tb => !tb.isCounter && tb.status === 'occupied' && !coveredTableIds.has(tb.id)
+  );
+
+  const openValue = openOrders.reduce((sum, o) => sum + (o.total || 0), 0);
+
+  return (
+    <div className="p-6">
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h1 className="text-2xl font-display font-bold text-dark-roast flex items-center gap-3">
+            <ClipboardList className="w-7 h-7" />
+            {t('openOrders', language)}
+          </h1>
+          <p className="text-sm text-medium-roast mt-1 flex items-center gap-2">
+            <span className="relative flex h-2.5 w-2.5">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-success opacity-60" />
+              <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-success" />
+            </span>
+            {t('liveView', language)}
+          </p>
+        </div>
+        <div className="flex gap-4">
+          <div className="bg-white rounded-xl px-5 py-3 shadow-sm text-center">
+            <p className="text-xs text-medium-roast mb-1">{t('openOrders', language)}</p>
+            <p className="text-2xl font-mono font-bold text-espresso">{openOrders.length + orphanOccupiedTables.length}</p>
+          </div>
+          <div className="bg-white rounded-xl px-5 py-3 shadow-sm text-center">
+            <p className="text-xs text-medium-roast mb-1">{t('total', language)}</p>
+            <p className="text-2xl font-mono font-bold text-accent">{formatPrice(openValue)}</p>
+          </div>
+        </div>
+      </div>
+
+      {openOrders.length === 0 && orphanOccupiedTables.length === 0 ? (
+        <div className="bg-white rounded-2xl p-12 shadow-sm text-center">
+          <ShoppingCart className="w-10 h-10 text-latte mx-auto mb-3" />
+          <p className="text-medium-roast">{t('noOpenOrders', language)}</p>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+          {openOrders.map(order => {
+            const itemCount = order.items.reduce((s, i) => s + i.quantity, 0);
+            const openedAt = order.boardStatus === 'held' ? order.heldAt : order.createdAt;
+            const isActive = order.boardStatus === 'active';
+            return (
+              <motion.div
+                key={order.id}
+                initial={{ opacity: 0, y: 12 }}
+                animate={{ opacity: 1, y: 0 }}
+                className={`bg-white rounded-2xl p-5 shadow-sm border-2 ${
+                  isActive ? 'border-accent' : 'border-warning/40'
+                }`}
+              >
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="font-display font-bold text-lg text-dark-roast">{tableLabel(order.tableId)}</h3>
+                  <span className={`px-2.5 py-1 rounded-full text-xs font-semibold ${
+                    isActive ? 'bg-accent/10 text-accent' : 'bg-warning/10 text-warning'
+                  }`}>
+                    {isActive ? t('activeNow', language) : t('held', language)}
+                  </span>
+                </div>
+                <p className="text-xs text-medium-roast font-mono mb-3">{order.id}</p>
+                <ul className="text-sm text-dark-roast space-y-1 mb-4">
+                  {order.items.slice(0, 5).map(item => (
+                    <li key={item.id} className="flex justify-between gap-2">
+                      <span className="truncate">{item.quantity}× {item.name}</span>
+                      <span className="font-mono text-medium-roast shrink-0">{formatPrice(item.price * item.quantity)}</span>
+                    </li>
+                  ))}
+                  {order.items.length > 5 && (
+                    <li className="text-medium-roast text-xs">+ {order.items.length - 5} more…</li>
+                  )}
+                </ul>
+                <div className="flex items-center justify-between pt-3 border-t border-latte/20 text-sm">
+                  <span className="text-medium-roast flex items-center gap-1.5">
+                    {isActive ? <ShoppingCart className="w-4 h-4" /> : <Pause className="w-4 h-4" />}
+                    {itemCount} {t('items', language)}
+                    {openedAt ? ` · ${formatElapsedTime(openedAt)}` : ''}
+                  </span>
+                  <span className="font-mono font-bold text-espresso">{formatPrice(order.total)}</span>
+                </div>
+              </motion.div>
+            );
+          })}
+
+          {orphanOccupiedTables.map(table => (
+            <div key={table.id} className="bg-white rounded-2xl p-5 shadow-sm border-2 border-latte/40">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="font-display font-bold text-lg text-dark-roast">{t('table', language)} {table.number}</h3>
+                <span className="px-2.5 py-1 rounded-full text-xs font-semibold bg-warning/10 text-warning">{t('occupied', language)}</span>
+              </div>
+              <p className="text-sm text-medium-roast">{t('noOrders', language)}</p>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // Users View
 function UsersView({ language, state, actions }) {
   const { users } = state;
@@ -207,8 +350,8 @@ function UsersView({ language, state, actions }) {
           <tbody>
             {users.map(user => (
               <tr key={user.id} className="border-t border-latte/10 hover:bg-cream/50">
-                <td className="px-6 py-4"><div className="flex items-center gap-3"><div className={`w-10 h-10 rounded-xl flex items-center justify-center ${user.role === 'admin' ? 'bg-espresso' : 'bg-success'}`}><Users className="w-5 h-5 text-white" /></div><span className="font-medium">{user.name}</span></div></td>
-                <td className="px-6 py-4"><span className={`px-3 py-1 rounded-full text-sm font-medium ${user.role === 'admin' ? 'bg-espresso/10 text-espresso' : 'bg-success/10 text-success'}`}>{t(user.role, language)}</span></td>
+                <td className="px-6 py-4"><div className="flex items-center gap-3"><div className={`w-10 h-10 rounded-xl flex items-center justify-center ${user.role === 'admin' ? 'bg-espresso' : user.role === 'manager' ? 'bg-accent' : 'bg-success'}`}><Users className="w-5 h-5 text-white" /></div><span className="font-medium">{user.name}</span></div></td>
+                <td className="px-6 py-4"><span className={`px-3 py-1 rounded-full text-sm font-medium ${user.role === 'admin' ? 'bg-espresso/10 text-espresso' : user.role === 'manager' ? 'bg-accent/10 text-accent' : 'bg-success/10 text-success'}`}>{t(user.role, language)}</span></td>
                 <td className="px-6 py-4 font-mono text-medium-roast">••••</td>
                 <td className="px-6 py-4"><div className="flex justify-end gap-2">
                   <button onClick={() => { setEditingUser(user); setFormData({ name: user.name, role: user.role, pin: user.pin }); setShowModal(true); }} className="p-2 hover:bg-latte/20 rounded-lg"><Edit className="w-4 h-4 text-medium-roast" /></button>
@@ -226,7 +369,7 @@ function UsersView({ language, state, actions }) {
             <h2 className="text-xl font-display font-bold mb-6">{editingUser ? t('editUser', language) : t('addUser', language)}</h2>
             <div className="space-y-4">
               <div><label className="block text-sm font-medium text-medium-roast mb-2">{t('userName', language)}</label><input type="text" value={formData.name} onChange={e => setFormData({ ...formData, name: e.target.value })} className="w-full px-4 py-3 bg-cream border border-latte/30 rounded-xl focus:outline-none focus:border-accent" /></div>
-              <div><label className="block text-sm font-medium text-medium-roast mb-2">{t('userRole', language)}</label><div className="grid grid-cols-2 gap-3">{['admin', 'server'].map(role => (<button key={role} onClick={() => setFormData({ ...formData, role })} className={`px-4 py-3 rounded-xl font-medium ${formData.role === role ? 'bg-accent text-white' : 'bg-cream'}`}>{t(role, language)}</button>))}</div></div>
+              <div><label className="block text-sm font-medium text-medium-roast mb-2">{t('userRole', language)}</label><div className="grid grid-cols-3 gap-3">{['admin', 'manager', 'server'].map(role => (<button key={role} onClick={() => setFormData({ ...formData, role })} className={`px-4 py-3 rounded-xl font-medium ${formData.role === role ? 'bg-accent text-white' : 'bg-cream'}`}>{t(role, language)}</button>))}</div></div>
               <div><label className="block text-sm font-medium text-medium-roast mb-2">{t('userPin', language)} (4 digits)</label><input type="text" value={formData.pin} onChange={e => setFormData({ ...formData, pin: e.target.value.replace(/[^0-9]/g, '').slice(0, 4) })} className="w-full px-4 py-3 bg-cream border border-latte/30 rounded-xl focus:outline-none focus:border-accent font-mono" maxLength={4} /></div>
             </div>
             <div className="flex gap-3 mt-6"><button onClick={() => setShowModal(false)} className="flex-1 py-3 bg-latte/10 rounded-xl font-medium">{t('cancel', language)}</button><button onClick={handleSubmit} disabled={!formData.name || formData.pin.length !== 4} className="flex-1 py-3 bg-accent text-white rounded-xl font-medium disabled:opacity-50">{t('save', language)}</button></div>
@@ -475,14 +618,17 @@ function ReportsView({ language, state, actions }) {
   const topItems = Object.values(itemCounts).sort((a, b) => b.quantity - a.quantity).slice(0, 5);
   
   const handleExportPdf = () => {
-    const content = `CAFÉ POS - SALES REPORT\n${dateRange === 'custom' ? `${customRange.from} to ${customRange.to}` : dateRange.toUpperCase()}\n========================\n\nSUMMARY\nTotal Sales: ${formatPrice(totalSales)}\nTotal Orders: ${totalOrders}\nAvg Order: ${formatPrice(avgOrderValue)}\nItems Sold: ${totalItems}\n\nTOP ITEMS\n${topItems.map((item, i) => `${i + 1}. ${item.name} - ${item.quantity} sold`).join('\n')}`;
-    const blob = new Blob([content], { type: 'text/plain' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `report-${dateRange}-${Date.now()}.txt`;
-    a.click();
-    URL.revokeObjectURL(url);
+    if (filteredOrders.length === 0) {
+      actions.addToast(t('noData', language), 'info');
+      return;
+    }
+    const rangeLabel = dateRange === 'custom'
+      ? `${customRange.from} → ${customRange.to}`
+      : dateRange === 'today' ? t('today', language)
+      : dateRange === 'week' ? t('thisWeek', language)
+      : t('thisMonth', language);
+    downloadSalesReportPdf({ rangeLabel, orders: filteredOrders });
+    actions.addToast(t('downloadPdf', language) + ' ✓', 'success');
   };
   
   return (

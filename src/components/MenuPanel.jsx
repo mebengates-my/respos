@@ -121,8 +121,12 @@ function MenuItemCard({ item, onAdd, disabled }) {
       initial={{ opacity: 0, scale: 0.9 }}
       animate={{ opacity: 1, scale: 1 }}
       exit={{ opacity: 0, scale: 0.9 }}
-      className={`relative bg-white rounded-xl shadow-sm border border-latte/20 overflow-hidden card-hover ${
-        disabled ? 'opacity-50 grayscale' : ''
+      onClick={() => {
+        // Tapping anywhere on the card adds the item (the + button still works too).
+        if (!disabled) onAdd();
+      }}
+      className={`relative bg-white rounded-xl shadow-sm border border-latte/20 overflow-hidden card-hover select-none ${
+        disabled ? 'opacity-50 grayscale cursor-not-allowed' : 'cursor-pointer active:scale-[0.98]'
       }`}
     >
       {/* Unavailable badge */}
@@ -141,6 +145,7 @@ function MenuItemCard({ item, onAdd, disabled }) {
           <button
             onClick={handleAdd}
             disabled={disabled}
+            aria-label={`Add ${item.name}`}
             className={`p-1.5 rounded-lg transition-all btn-press ${
               disabled
                 ? 'bg-latte/20 text-latte cursor-not-allowed'

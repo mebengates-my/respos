@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useApp } from '../context/AppContext';
 import { formatPrice } from '../utils/helpers';
+import { t } from '../data/language';
 import {
   ShoppingCart,
   Trash2,
@@ -17,7 +18,8 @@ import {
   Percent,
   AlertCircle,
   Gift,
-  RotateCcw
+  RotateCcw,
+  Info
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { discountPresets } from '../data/menuData';
@@ -26,12 +28,15 @@ import HeldOrdersModal from './HeldOrdersModal';
 
 export default function OrderPanel() {
   const { state, actions } = useApp();
-  const { currentOrder, selectedTable, taxRate, discountPresets: presets, heldOrders } = state;
+  const { currentOrder, selectedTable, taxRate, discountPresets: presets, heldOrders, currentUser, language } = state;
   const confirm = useConfirm();
   const [showDiscounts, setShowDiscounts] = useState(false);
   const [showNotes, setShowNotes] = useState(false);
   const [noteText, setNoteText] = useState('');
   const [showHeldOrders, setShowHeldOrders] = useState(false);
+  
+  // Servers only take orders — collecting money is reserved for Admin/Manager.
+  const isServer = currentUser?.role === 'server';
   
   const isEmpty = !currentOrder || currentOrder.items.length === 0;
   
@@ -329,47 +334,54 @@ export default function OrderPanel() {
           </button>
         </div>
         
-        {/* Payment buttons */}
-        <div className="grid grid-cols-3 gap-2">
-          <button
-            onClick={() => actions.openPaymentModal('cash')}
-            disabled={isEmpty}
-            className={`flex flex-col items-center justify-center gap-1 px-4 py-4 rounded-xl font-semibold transition-all btn-press ${
-              isEmpty
-                ? 'bg-latte/20 text-latte cursor-not-allowed'
-                : 'bg-success text-white hover:bg-success/90 shadow-lg shadow-success/30'
-            }`}
-          >
-            <Banknote className="w-6 h-6" />
-            <span>Cash</span>
-          </button>
-          
-          <button
-            onClick={() => actions.openPaymentModal('card')}
-            disabled={isEmpty}
-            className={`flex flex-col items-center justify-center gap-1 px-4 py-4 rounded-xl font-semibold transition-all btn-press ${
-              isEmpty
-                ? 'bg-latte/20 text-latte cursor-not-allowed'
-                : 'bg-espresso text-white hover:bg-espresso/90 shadow-lg shadow-espresso/30'
-            }`}
-          >
-            <CreditCard className="w-6 h-6" />
-            <span>Card</span>
-          </button>
-          
-          <button
-            onClick={() => actions.openPaymentModal('ewallet')}
-            disabled={isEmpty}
-            className={`flex flex-col items-center justify-center gap-1 px-4 py-4 rounded-xl font-semibold transition-all btn-press ${
-              isEmpty
-                ? 'bg-latte/20 text-latte cursor-not-allowed'
-                : 'bg-medium-roast text-white hover:bg-medium-roast/90 shadow-lg shadow-medium-roast/30'
-            }`}
-          >
-            <Smartphone className="w-6 h-6" />
-            <span>E-Wallet</span>
-          </button>
-        </div>
+        {/* Payment buttons — hidden for servers, who only take orders */}
+        {isServer ? (
+          <div className="flex items-start gap-2 px-4 py-3 bg-latte/10 rounded-xl text-sm text-medium-roast">
+            <Info className="w-4 h-4 mt-0.5 shrink-0" />
+            <span>{t('serverNoPayment', language)}</span>
+          </div>
+        ) : (
+          <div className="grid grid-cols-3 gap-2">
+            <button
+              onClick={() => actions.openPaymentModal('cash')}
+              disabled={isEmpty}
+              className={`flex flex-col items-center justify-center gap-1 px-4 py-4 rounded-xl font-semibold transition-all btn-press ${
+                isEmpty
+                  ? 'bg-latte/20 text-latte cursor-not-allowed'
+                  : 'bg-success text-white hover:bg-success/90 shadow-lg shadow-success/30'
+              }`}
+            >
+              <Banknote className="w-6 h-6" />
+              <span>Cash</span>
+            </button>
+            
+            <button
+              onClick={() => actions.openPaymentModal('card')}
+              disabled={isEmpty}
+              className={`flex flex-col items-center justify-center gap-1 px-4 py-4 rounded-xl font-semibold transition-all btn-press ${
+                isEmpty
+                  ? 'bg-latte/20 text-latte cursor-not-allowed'
+                  : 'bg-espresso text-white hover:bg-espresso/90 shadow-lg shadow-espresso/30'
+              }`}
+            >
+              <CreditCard className="w-6 h-6" />
+              <span>Card</span>
+            </button>
+            
+            <button
+              onClick={() => actions.openPaymentModal('ewallet')}
+              disabled={isEmpty}
+              className={`flex flex-col items-center justify-center gap-1 px-4 py-4 rounded-xl font-semibold transition-all btn-press ${
+                isEmpty
+                  ? 'bg-latte/20 text-latte cursor-not-allowed'
+                  : 'bg-medium-roast text-white hover:bg-medium-roast/90 shadow-lg shadow-medium-roast/30'
+              }`}
+            >
+              <Smartphone className="w-6 h-6" />
+              <span>E-Wallet</span>
+            </button>
+          </div>
+        )}
       </div>
       
       {/* Held Orders Modal */}

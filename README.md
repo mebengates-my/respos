@@ -18,9 +18,15 @@ npm run preview
 
 ## Current behaviour
 
-- **Admin landing page:** an admin login opens the Admin Panel, with **Dashboard** selected by default.
+- **Roles:** there are three roles —
+  - **Admin:** full management panel (users, categories, menu items, tables, reports, open orders, settings). Only admins can add servers, managers, or other admins.
+  - **Manager:** everything an admin can see and do *except* User Management and Settings — dashboard, open orders (live), categories, menu items, tables, and reports. Managers land in the Manager Panel after login.
+  - **Server:** POS order taking only. Servers have no Reports tab and no Cash/Card/E-Wallet payment buttons — collecting money is reserved for Admin/Manager.
+- **Admin landing page:** an admin or manager login opens the management panel, with **Dashboard** selected by default.
 - **Bangladesh menu:** categories and menu items share stable category IDs. The app migrates older browser caches that contained legacy categories but no matching menu items to the current Bangladesh menu.
-- **Refresh and login:** the authenticated user is held only in React memory and is never saved in browser storage. Refreshing the page therefore returns to the PIN login screen.
+- **Refresh and login:** the signed-in user's session is stored in browser storage (user id only), so a browser refresh keeps the user logged in. The id is re-checked against the saved users list on load — a deleted or deactivated user is not restored. Logging out clears the session on every open tab of the device.
+- **Report export:** report views (Admin Panel and Reports) export a real PDF built with jsPDF.
+- **Menu items:** tapping anywhere on a menu item card adds it to the order; the + icon still works as before.
 - **Local persistence:** menus, categories, table state, staff, held orders, and order history are saved together in `localStorage`. Editing a category or menu item survives a refresh and does not leave menu items pointing at missing categories.
 - **Offline use:** production builds register a small service worker. After the app has been visited online, its application shell can reopen offline; local POS data and normal order actions continue to work on that device. The header reflects the browser's real online/offline event state.
 - **Same-device tabs:** browser storage events keep separate tabs open on the same browser profile aligned.

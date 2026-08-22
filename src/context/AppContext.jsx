@@ -79,9 +79,14 @@ const ACTIONS = {
   LOAD_SAVED_STATE: 'LOAD_SAVED_STATE',
 };
 
+// localStorage key holding the signed-in user. Only the user id is stored; the full
+// user record is always re-resolved against the persisted users list.
+export const SESSION_STORAGE_KEY = 'cafe-pos-session';
+
 // Initial users (staff)
 const defaultUsers = [
   { id: 'admin-1', name: 'Admin User', role: 'admin', pin: '1234', active: true },
+  { id: 'manager-1', name: 'Nadia Rahman', role: 'manager', pin: '5555', active: true },
   { id: 'server-1', name: 'Maria Santos', role: 'server', pin: '1111', active: true },
   { id: 'server-2', name: 'Ahmad Khan', role: 'server', pin: '2222', active: true },
   { id: 'server-3', name: 'Sarah Lee', role: 'server', pin: '3333', active: true },
@@ -167,8 +172,9 @@ function appReducer(state, action) {
         ...state,
         currentUser: action.payload,
         isLoggedIn: true,
-        // Admins land directly in the Admin Panel; its default tab is Dashboard.
-        view: action.payload.role === 'admin' ? 'admin' : 'pos',
+        // Admins and managers land directly in the management panel; its default tab
+        // is Dashboard. Servers go straight to the POS.
+        view: action.payload.role === 'admin' || action.payload.role === 'manager' ? 'admin' : 'pos',
       };
     
     case ACTIONS.LOGOUT:
@@ -396,6 +402,7 @@ function appReducer(state, action) {
             id: generateOrderId(), 
             items: [], 
             status: 'open',
+            createdAt: Date.now(),
             tableId: state.selectedTable?.id || 'COUNTER',
             serverId: state.currentUser?.id,
           }),
@@ -615,8 +622,20 @@ function appReducer(state, action) {
       return { ...state, isOffline: action.payload };
     
     // Data persistence
-    case ACTIONS.LOAD_SAVED_STATE:
-      return { ...state, ...action.payload };
+    case ACTIONS.LOAD_SAVED_STATE: {
+      const next = { ...state, ...action.payload };
+      // Keep the signed-in user in step with the (possibly newer) users list coming
+      // from storage: pick up renames/role changes, and sign out if the user was
+      // deleted or deactivated on another tab.
+      if (next.currentUser && Array.isArray(next.users)) {
+        const fresh = next.users.find(u => u.id === next.currentUser.id);
+        if (!fresh || fresh.active === false) {
+          return { ...next, currentUser: null, isLoggedIn: false, view: 'pos', currentOrder: null };
+        }
+        next.currentUser = fresh;
+      }
+      return next;
+    }
     
     default:
       return state;
@@ -627,25 +646,64 @@ function appReducer(state, action) {
 export function AppProvider({ children }) {
   const [state, dispatch] = useReducer(appReducer, initialState);
   
-  // Restore the on-device data. Authentication is deliberately never restored, so a
-  // browser refresh always returns the active user to the PIN screen.
+  // Restore the on-device data, then restore the signed-in user. The session survives
+  // a browser refresh: only the user id is stored, and it is re-checked against the
+  // persisted users list (so a deleted/deactivated user cannot be restored).
   useEffect(() => {
     const savedState = loadFromStorage('cafe-pos-state', null);
+    let restoredUsers = defaultUsers;
     if (savedState) {
-      dispatch({ type: ACTIONS.LOAD_SAVED_STATE, payload: getPersistedState(savedState) });
+      const persisted = getPersistedState(savedState);
+      restoredUsers = Array.isArray(persisted.users) && persisted.users.length > 0
+        ? persisted.users
+        : defaultUsers;
+      dispatch({ type: ACTIONS.LOAD_SAVED_STATE, payload: persisted });
+    }
+
+    const session = loadFromStorage(SESSION_STORAGE_KEY, null);
+    if (session?.userId) {
+      const user = restoredUsers.find(u => u.id === session.userId && u.active !== false);
+      if (user) {
+        dispatch({ type: ACTIONS.LOGIN, payload: user });
+      } else {
+        saveToStorage(SESSION_STORAGE_KEY, null);
+      }
     }
 
     // Keep separate tabs on the same device in step. A shared server is still required
     // to synchronise data between different users/devices.
     const syncFromAnotherTab = (event) => {
-      if (event.key !== 'cafe-pos-state' || !event.newValue) return;
-      try {
-        dispatch({
-          type: ACTIONS.LOAD_SAVED_STATE,
-          payload: getPersistedState(JSON.parse(event.newValue)),
-        });
-      } catch {
-        // Ignore corrupt storage written by an older browser session.
+      if (event.key === 'cafe-pos-state' && event.newValue) {
+        try {
+          dispatch({
+            type: ACTIONS.LOAD_SAVED_STATE,
+            payload: getPersistedState(JSON.parse(event.newValue)),
+          });
+        } catch {
+          // Ignore corrupt storage written by an older browser session.
+        }
+        return;
+      }
+
+      // Mirror login/logout across tabs on this device.
+      if (event.key === SESSION_STORAGE_KEY) {
+        try {
+          const sessionData = event.newValue ? JSON.parse(event.newValue) : null;
+          if (!sessionData?.userId) {
+            dispatch({ type: ACTIONS.LOGOUT });
+            return;
+          }
+          const latestState = loadFromStorage('cafe-pos-state', null);
+          const usersList = Array.isArray(latestState?.users) && latestState.users.length > 0
+            ? latestState.users
+            : defaultUsers;
+          const user = usersList.find(u => u.id === sessionData.userId && u.active !== false);
+          if (user) {
+            dispatch({ type: ACTIONS.LOGIN, payload: user });
+          }
+        } catch {
+          // Ignore corrupt session writes.
+        }
       }
     };
     window.addEventListener('storage', syncFromAnotherTab);
@@ -711,10 +769,13 @@ export function AppProvider({ children }) {
   const actions = {
     // Auth
     login: useCallback((user) => {
+      // Persist the session so a browser refresh keeps the user signed in.
+      saveToStorage(SESSION_STORAGE_KEY, { userId: user.id, signedInAt: Date.now() });
       dispatch({ type: ACTIONS.LOGIN, payload: user });
     }, []),
     
     logout: useCallback(() => {
+      saveToStorage(SESSION_STORAGE_KEY, null);
       dispatch({ type: ACTIONS.LOGOUT });
     }, []),
     

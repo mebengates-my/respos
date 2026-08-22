@@ -22,6 +22,9 @@ export default function Header() {
   const { currentUser, view, language, isOffline } = state;
   
   const isAdmin = currentUser?.role === 'admin';
+  const isManager = currentUser?.role === 'manager';
+  const isServer = currentUser?.role === 'server';
+  const canManage = isAdmin || isManager;
   
   const handleLogout = async () => {
     const ok = await confirm({
@@ -60,16 +63,19 @@ export default function Header() {
           active={view === 'tables'}
           onClick={() => actions.setView('tables')}
         />
-        <NavButton
-          icon={<BarChart3 className="w-4 h-4" />}
-          label={t('reports', language)}
-          active={view === 'reports'}
-          onClick={() => actions.setView('reports')}
-        />
-        {isAdmin && (
+        {/* Servers only take orders — reports are for admins and managers */}
+        {!isServer && (
+          <NavButton
+            icon={<BarChart3 className="w-4 h-4" />}
+            label={t('reports', language)}
+            active={view === 'reports'}
+            onClick={() => actions.setView('reports')}
+          />
+        )}
+        {canManage && (
           <NavButton
             icon={<Shield className="w-4 h-4" />}
-            label={t('adminPanel', language)}
+            label={isAdmin ? t('adminPanel', language) : t('managerPanel', language)}
             active={view === 'admin'}
             onClick={() => actions.setView('admin')}
           />
@@ -105,12 +111,12 @@ export default function Header() {
         
         {/* User indicator */}
         <div className="flex items-center gap-2 px-3 py-1.5 bg-latte/30 rounded-lg">
-          <div className={`w-8 h-8 ${isAdmin ? 'bg-accent' : 'bg-success'} rounded-lg flex items-center justify-center`}>
+          <div className={`w-8 h-8 ${isAdmin ? 'bg-accent' : isManager ? 'bg-medium-roast' : 'bg-success'} rounded-lg flex items-center justify-center`}>
             <User className="w-4 h-4" />
           </div>
           <div className="hidden md:block">
             <p className="font-medium text-sm">{currentUser?.name}</p>
-            <p className="text-xs text-latte capitalize">{currentUser?.role}</p>
+            <p className="text-xs text-latte">{t(currentUser?.role, language)}</p>
           </div>
         </div>
         
