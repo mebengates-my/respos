@@ -7,11 +7,11 @@ export default defineConfig({
   server: {
     host: '0.0.0.0',
     port: 5173,
-    allowedHosts: ['ihff49llgd996cl56ezjh.e2b.app', '5173-ihff49llgd996cl56ezjh.e2b.app']
+    allowedHosts: true
   },
   preview: {
     host: '0.0.0.0',
     port: 5173,
-    allowedHosts: ['ihff49llgd996cl56ezjh.e2b.app', '5173-ihff49llgd996cl56ezjh.e2b.app']
+    allowedHosts: true
   }
 })

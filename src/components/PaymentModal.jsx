@@ -15,6 +15,9 @@ import {
   Calculator
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import ReceiptModal from './Receipt';
+import { printThermalReceipt } from './Receipt';
+import { loadStoreSettings } from '../data/storeSettings';
 
 const QUICK_CASH_AMOUNTS = [500, 1000, 2000, 5000, 10000, 20000];
 
@@ -24,6 +27,9 @@ export default function PaymentModal() {
   const [step, setStep] = useState('select'); // 'select' | 'enter' | 'processing' | 'success'
   const [customAmount, setCustomAmount] = useState('');
   const [amountPaid, setAmountPaid] = useState(0);
+  // Snapshot of the order after payment (currentOrder is cleared on payment)
+  const [lastPaidOrder, setLastPaidOrder] = useState(null);
+  const [showReceipt, setShowReceipt] = useState(false);
   const inputRef = useRef(null);
   
   useEffect(() => {
@@ -31,6 +37,8 @@ export default function PaymentModal() {
       setStep(paymentMethod ? 'enter' : 'select');
       setCustomAmount('');
       setAmountPaid(0);
+      setLastPaidOrder(null);
+      setShowReceipt(false);
     }
   }, [isPaymentModalOpen, paymentMethod]);
   
@@ -51,15 +59,38 @@ export default function PaymentModal() {
     
     // Simulate payment processing
     setTimeout(() => {
-      setStep('success');
+      // Build a snapshot of the completed order BEFORE processPayment clears currentOrder
+      const completedOrder = {
+        ...currentOrder,
+        status: 'paid',
+        paymentMethod,
+        amountPaid,
+        change,
+        paidAt: Date.now(),
+        serverName: state.currentUser?.name,
+      };
+      setLastPaidOrder(completedOrder);
+
       actions.processPayment(paymentMethod, amountPaid, change);
       actions.addToast('Payment successful!', 'success');
+
+      // Auto-print receipt if enabled in Store Settings (best-effort; popup blockers may block)
+      const settings = loadStoreSettings();
+      if (settings.autoPrintReceipt) {
+        const ok = printThermalReceipt(completedOrder, settings);
+        // If the print popup was blocked, surface the receipt modal so it can be printed manually
+        if (!ok) setShowReceipt(true);
+      }
+
+      setStep('success');
     }, 1500);
   };
   
   const handleClose = () => {
     actions.closePaymentModal();
     setStep('select');
+    setShowReceipt(false);
+    setLastPaidOrder(null);
   };
   
   const handleSelectMethod = (method) => {
@@ -150,10 +181,25 @@ export default function PaymentModal() {
               amountPaid={amountPaid}
               change={change}
               onClose={handleClose}
+              onShowReceipt={() => setShowReceipt(true)}
+              onPrint={() => {
+                if (lastPaidOrder) {
+                  const ok = printThermalReceipt(lastPaidOrder);
+                  if (!ok) setShowReceipt(true);
+                }
+              }}
             />
           )}
         </motion.div>
       </motion.div>
+
+      {/* Receipt modal — shown on demand after payment */}
+      {showReceipt && lastPaidOrder && (
+        <ReceiptModal
+          order={lastPaidOrder}
+          onClose={() => setShowReceipt(false)}
+        />
+      )}
     </AnimatePresence>
   );
 }
@@ -527,7 +573,7 @@ function ProcessingStep() {
   );
 }
 
-function SuccessStep({ amountPaid, change, onClose }) {
+function SuccessStep({ change, onClose, onShowReceipt, onPrint }) {
   return (
     <motion.div
       initial={{ scale: 0.9, opacity: 0 }}
@@ -560,11 +606,17 @@ function SuccessStep({ amountPaid, change, onClose }) {
       )}
       
       <div className="flex gap-3 w-full mb-4">
-        <button className="flex-1 flex items-center justify-center gap-2 py-3 bg-latte/10 text-espresso rounded-xl font-medium hover:bg-latte/20 transition-colors btn-press">
+        <button
+          onClick={onShowReceipt}
+          className="flex-1 flex items-center justify-center gap-2 py-3 bg-latte/10 text-espresso rounded-xl font-medium hover:bg-latte/20 transition-colors btn-press"
+        >
           <Receipt className="w-5 h-5" />
           Receipt
         </button>
-        <button className="flex-1 flex items-center justify-center gap-2 py-3 bg-latte/10 text-espresso rounded-xl font-medium hover:bg-latte/20 transition-colors btn-press">
+        <button
+          onClick={onPrint}
+          className="flex-1 flex items-center justify-center gap-2 py-3 bg-espresso text-white rounded-xl font-medium hover:bg-espresso/90 transition-colors btn-press"
+        >
           <Printer className="w-5 h-5" />
           Print
         </button>

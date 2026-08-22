@@ -4,30 +4,133 @@ import { formatPrice, formatElapsedTime } from '../utils/helpers';
 import {
   ArrowLeft,
   Users,
-  Clock,
-  Plus,
-  Trash2,
   History,
   RotateCcw,
-  DollarSign
+  Trash2,
+  ArrowRightLeft,
+  SprayCan,
+  UserPlus,
+  Bookmark,
+  X,
+  MoveRight,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 export default function TableView() {
   const { state, actions } = useApp();
-  const { tables, heldOrders, orderHistory, currentOrder } = state;
+  const { tables, heldOrders, currentOrder } = state;
   
-  const [selectedTable, setSelectedTable] = React.useState(null);
   const [showHeldOrders, setShowHeldOrders] = React.useState(false);
+  // Table transfer mode: id of the source table, or null
+  const [transferFrom, setTransferFrom] = React.useState(null);
   
-  const handleTableClick = (table) => {
-    if (table.status === 'occupied' && table.currentOrderId) {
-      setSelectedTable(table);
-    } else if (table.status === 'available') {
-      // Start new order for this table
+  const transferMode = transferFrom !== null;
+  const transferFromTable = tables.find(t => t.id === transferFrom);
+  
+  const handleCardClick = (table) => {
+    // In transfer mode, tapping an available table selects it as the target
+    if (transferMode) {
+      if (table.id === transferFrom) {
+        setTransferFrom(null);
+        return;
+      }
+      if (table.status === 'available' && !table.isCounter) {
+        confirmTransfer(table);
+      } else {
+        actions.addToast('Pick an available dining table', 'error');
+      }
+      return;
+    }
+    
+    if (table.status === 'available') {
       actions.selectTable(table);
       actions.setView('pos');
-      actions.addToast(`Table ${table.number} selected`, 'info');
+      actions.addToast(`${table.isCounter ? 'Counter' : 'Table ' + table.number} selected`, 'info');
+    } else if (table.status === 'occupied') {
+      // Resume the active order for this table
+      actions.selectTable(table);
+      actions.setView('pos');
+    }
+    // cleaning / reserved are handled via their action buttons
+  };
+  
+  const startTransfer = (table) => {
+    setTransferFrom(table.id);
+    actions.addToast(`Tap a free table to move Table ${table.number} to`, 'info');
+  };
+  
+  const confirmTransfer = (targetTable) => {
+    if (!transferFrom) return;
+    const fromTable = tables.find(t => t.id === transferFrom);
+    setTransferFrom(null);
+    if (!fromTable) return;
+    if (targetTable.id === fromTable.id) return;
+    if (targetTable.status !== 'available' || targetTable.isCounter) {
+      actions.addToast('Pick an available dining table', 'error');
+      return;
+    }
+    if (confirm(`Move the order from Table ${fromTable.number} to Table ${targetTable.number}?`)) {
+      actions.transferTable(fromTable.id, targetTable.id);
+      actions.addToast(`Order moved to Table ${targetTable.number}`, 'success');
+    }
+  };
+  
+  const cancelReservation = (table) => {
+    if (confirm(`Cancel reservation for Table ${table.number}?`)) {
+      actions.updateTableStatus(table.id, 'available');
+      actions.addToast(`Table ${table.number} is now available`, 'info');
+    }
+  };
+  
+  const seatGuests = (table) => {
+    actions.updateTableStatus(table.id, 'available');
+    actions.selectTable(table);
+    actions.setView('pos');
+    actions.addToast(`Seating guests at Table ${table.number}`, 'info');
+  };
+  
+  const markClean = (table) => {
+    actions.updateTableStatus(table.id, 'available');
+    actions.addToast(`Table ${table.number} marked clean`, 'success');
+  };
+  
+  const clearTable = (table) => {
+    if (confirm(`Free up Table ${table.number}? (mark as available)`)) {
+      actions.updateTableStatus(table.id, 'available');
+      actions.addToast(`Table ${table.number} cleared`, 'info');
+    }
+  };
+  
+  const handleAction = (table, action) => {
+    switch (action) {
+      case 'view':
+        actions.selectTable(table);
+        actions.setView('pos');
+        break;
+      case 'transfer':
+        startTransfer(table);
+        break;
+      case 'clear':
+        clearTable(table);
+        break;
+      case 'clean':
+        markClean(table);
+        break;
+      case 'seat':
+        seatGuests(table);
+        break;
+      case 'cancel-reservation':
+        cancelReservation(table);
+        break;
+      case 'reserve':
+        actions.updateTableStatus(table.id, 'reserved');
+        actions.addToast(`Table ${table.number} reserved`, 'info');
+        break;
+      case 'transfer-here':
+        confirmTransfer(table);
+        break;
+      default:
+        break;
     }
   };
   
@@ -38,20 +141,16 @@ export default function TableView() {
     actions.addToast('Order recalled', 'success');
   };
   
-  const handleClearTable = (table) => {
-    if (confirm(`Clear Table ${table.number}?`)) {
-      actions.updateTableStatus(table.id, 'available');
-      actions.addToast(`Table ${table.number} cleared`, 'info');
-    }
-  };
-  
   return (
     <div className="flex-1 flex flex-col h-full bg-cream">
       {/* Header */}
       <div className="p-4 bg-white border-b border-latte/20 flex items-center justify-between">
         <div className="flex items-center gap-4">
           <button
-            onClick={() => actions.setView('pos')}
+            onClick={() => {
+              setTransferFrom(null);
+              actions.setView('pos');
+            }}
             className="flex items-center gap-2 text-medium-roast hover:text-dark-roast transition-colors"
           >
             <ArrowLeft className="w-5 h-5" />
@@ -76,6 +175,41 @@ export default function TableView() {
           </button>
         </div>
       </div>
+      
+      {/* Transfer Mode Banner */}
+      <AnimatePresence>
+        {transferMode && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            className="bg-accent/10 border-b border-accent/30 overflow-hidden"
+          >
+            <div className="p-4 flex items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 bg-accent/20 rounded-xl flex items-center justify-center">
+                  <ArrowRightLeft className="w-5 h-5 text-accent" />
+                </div>
+                <div>
+                  <p className="font-semibold text-dark-roast">
+                    Transfer Mode — Table {transferFromTable?.number}
+                  </p>
+                  <p className="text-sm text-medium-roast">
+                    Tap an <span className="font-medium text-success">available</span> table to move the order there
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setTransferFrom(null)}
+                className="flex items-center gap-2 px-4 py-2 bg-white border border-latte/30 rounded-xl font-medium text-medium-roast hover:bg-latte/10 btn-press"
+              >
+                <X className="w-4 h-4" />
+                Cancel
+              </button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
       
       {/* Held Orders Panel */}
       <AnimatePresence>
@@ -144,11 +278,9 @@ export default function TableView() {
               <TableCard
                 table={tables.find(t => t.isCounter)}
                 isSelected={currentOrder?.tableId === 'COUNTER'}
-                onClick={() => {
-                  actions.selectTable(tables.find(t => t.isCounter));
-                  actions.setView('pos');
-                }}
-                onClear={handleClearTable}
+                transferMode={transferMode}
+                onClick={handleCardClick}
+                onAction={handleAction}
               />
             </div>
           </div>
@@ -164,8 +296,10 @@ export default function TableView() {
                   key={table.id}
                   table={table}
                   isSelected={currentOrder?.tableId === table.id}
-                  onClick={() => handleTableClick(table)}
-                  onClear={handleClearTable}
+                  isTransferSource={transferFrom === table.id}
+                  transferMode={transferMode}
+                  onClick={handleCardClick}
+                  onAction={handleAction}
                 />
               ))}
             </div>
@@ -185,7 +319,26 @@ function LegendItem({ color, label }) {
   );
 }
 
-function TableCard({ table, isSelected, onClick, onClear }) {
+function ActionButton({ onClick, icon: Icon, label, variant = 'neutral' }) {
+  const variants = {
+    neutral: 'bg-latte/10 text-espresso hover:bg-latte/20',
+    primary: 'bg-accent text-white hover:bg-accent/90',
+    success: 'bg-success text-white hover:bg-success/90',
+    warning: 'bg-warning/10 text-warning hover:bg-warning/20',
+    danger: 'bg-error/10 text-error hover:bg-error/20',
+  };
+  return (
+    <button
+      onClick={onClick}
+      className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-medium transition-colors btn-press ${variants[variant]}`}
+    >
+      {Icon && <Icon className="w-3.5 h-3.5" />}
+      {label}
+    </button>
+  );
+}
+
+function TableCard({ table, isSelected, isTransferSource, transferMode, onClick, onAction }) {
   if (!table) return null;
   
   const statusColors = {
@@ -202,14 +355,22 @@ function TableCard({ table, isSelected, onClick, onClear }) {
     cleaning: 'Cleaning',
   };
   
+  const isCounter = table.isCounter;
+  const isTransferTarget = transferMode && table.status === 'available' && !isTransferSource && !isCounter;
+  const clickable = table.status === 'available' || table.status === 'occupied' || isTransferTarget;
+  
   return (
     <motion.div
-      whileHover={{ scale: 1.02 }}
-      whileTap={{ scale: 0.98 }}
-      onClick={onClick}
-      className={`relative bg-white rounded-2xl p-4 shadow-sm border-2 cursor-pointer transition-all ${
+      whileHover={{ scale: clickable ? 1.02 : 1 }}
+      whileTap={{ scale: clickable ? 0.98 : 1 }}
+      onClick={() => onClick(table)}
+      className={`relative bg-white rounded-2xl p-4 shadow-sm border-2 transition-all ${
         isSelected
           ? 'border-accent shadow-lg ring-4 ring-accent/20'
+          : isTransferSource
+          ? 'border-warning shadow-lg ring-4 ring-warning/30'
+          : isTransferTarget
+          ? 'border-accent shadow-md ring-2 ring-accent/40 cursor-pointer'
           : 'border-transparent hover:shadow-md'
       }`}
     >
@@ -221,7 +382,7 @@ function TableCard({ table, isSelected, onClick, onClear }) {
       {/* Table info */}
       <div className="text-center">
         <h3 className="font-display text-2xl font-bold text-dark-roast">
-          {table.isCounter ? 'COUNTER' : table.number}
+          {isCounter ? 'COUNTER' : table.number}
         </h3>
         <div className="flex items-center justify-center gap-2 mt-2 text-sm text-medium-roast">
           <Users className="w-4 h-4" />
@@ -237,27 +398,83 @@ function TableCard({ table, isSelected, onClick, onClear }) {
         </p>
       </div>
       
-      {/* Actions for occupied tables */}
-      {table.status === 'occupied' && (
-        <div className="mt-3 pt-3 border-t border-latte/20 flex gap-2">
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onClick();
-            }}
-            className="flex-1 py-2 bg-espresso text-white rounded-lg text-sm font-medium hover:bg-espresso/90 btn-press"
-          >
-            View Order
-          </button>
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onClear(table);
-            }}
-            className="p-2 bg-error/10 text-error rounded-lg hover:bg-error/20 btn-press"
-          >
-            <Trash2 className="w-4 h-4" />
-          </button>
+      {/* Contextual actions (dining tables only) */}
+      {!isCounter && (
+        <div className="mt-3 pt-3 border-t border-latte/20 space-y-2">
+          {table.status === 'occupied' && !isTransferSource && (
+            <div className="flex gap-2">
+              <ActionButton
+                onClick={(e) => { e.stopPropagation(); onAction(table, 'view'); }}
+                icon={RotateCcw}
+                label="Open"
+                variant="neutral"
+              />
+              <ActionButton
+                onClick={(e) => { e.stopPropagation(); onAction(table, 'transfer'); }}
+                icon={ArrowRightLeft}
+                label="Transfer"
+                variant="warning"
+              />
+              <button
+                onClick={(e) => { e.stopPropagation(); onAction(table, 'clear'); }}
+                className="p-2 bg-error/10 text-error rounded-lg hover:bg-error/20 btn-press"
+                title="Free table"
+              >
+                <Trash2 className="w-4 h-4" />
+              </button>
+            </div>
+          )}
+          
+          {table.status === 'occupied' && isTransferSource && (
+            <div className="flex items-center justify-center gap-1.5 py-2 text-xs font-medium text-warning">
+              <MoveRight className="w-4 h-4" />
+              Pick a free table
+            </div>
+          )}
+          
+          {table.status === 'cleaning' && (
+            <ActionButton
+              onClick={(e) => { e.stopPropagation(); onAction(table, 'clean'); }}
+              icon={SprayCan}
+              label="Mark Clean"
+              variant="success"
+            />
+          )}
+          
+          {table.status === 'reserved' && (
+            <div className="flex gap-2">
+              <ActionButton
+                onClick={(e) => { e.stopPropagation(); onAction(table, 'seat'); }}
+                icon={UserPlus}
+                label="Seat"
+                variant="success"
+              />
+              <ActionButton
+                onClick={(e) => { e.stopPropagation(); onAction(table, 'cancel-reservation'); }}
+                icon={X}
+                label="Cancel"
+                variant="danger"
+              />
+            </div>
+          )}
+          
+          {table.status === 'available' && !transferMode && (
+            <ActionButton
+              onClick={(e) => { e.stopPropagation(); onAction(table, 'reserve'); }}
+              icon={Bookmark}
+              label="Reserve"
+              variant="neutral"
+            />
+          )}
+          
+          {isTransferTarget && (
+            <ActionButton
+              onClick={(e) => { e.stopPropagation(); onAction(table, 'transfer-here'); }}
+              icon={MoveRight}
+              label="Move Here"
+              variant="primary"
+            />
+          )}
         </div>
       )}
     </motion.div>

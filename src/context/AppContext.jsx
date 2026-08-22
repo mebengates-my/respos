@@ -46,6 +46,7 @@ const ACTIONS = {
   UPDATE_TABLE: 'UPDATE_TABLE',
   DELETE_TABLE: 'DELETE_TABLE',
   UPDATE_TABLE_STATUS: 'UPDATE_TABLE_STATUS',
+  TRANSFER_TABLE: 'TRANSFER_TABLE',
   
   // Users (Admin)
   ADD_USER: 'ADD_USER',
@@ -245,6 +246,41 @@ function appReducer(state, action) {
           : table
       );
       return { ...state, tables: newTables };
+    }
+    
+    case ACTIONS.TRANSFER_TABLE: {
+      const { fromTableId, toTableId } = action.payload;
+      const fromTable = state.tables.find(t => t.id === fromTableId);
+      const toTable = state.tables.find(t => t.id === toTableId);
+      if (!fromTable || !toTable || fromTableId === toTableId) return state;
+      
+      // Resolve the order id attached to the source table
+      const orderId =
+        fromTable.currentOrderId ||
+        (state.currentOrder?.tableId === fromTableId ? state.currentOrder.id : null) ||
+        state.heldOrders.find(o => o.tableId === fromTableId)?.id ||
+        null;
+      
+      const newTables = state.tables.map(table => {
+        if (table.id === fromTableId) return { ...table, status: 'available', currentOrderId: null };
+        if (table.id === toTableId) return { ...table, status: 'occupied', currentOrderId: orderId };
+        return table;
+      });
+      
+      // If the currently active order belongs to the source table, move it along
+      let currentOrder = state.currentOrder;
+      let selectedTable = state.selectedTable;
+      if (currentOrder && currentOrder.tableId === fromTableId) {
+        currentOrder = { ...currentOrder, tableId: toTableId };
+        selectedTable = newTables.find(t => t.id === toTableId) || null;
+      }
+      
+      // Move any held orders parked at the source table too
+      const heldOrders = state.heldOrders.map(o =>
+        o.tableId === fromTableId ? { ...o, tableId: toTableId } : o
+      );
+      
+      return { ...state, tables: newTables, currentOrder, selectedTable, heldOrders };
     }
     
     // Users
@@ -661,6 +697,10 @@ export function AppProvider({ children }) {
     
     updateTableStatus: useCallback((tableId, status) => {
       dispatch({ type: ACTIONS.UPDATE_TABLE_STATUS, payload: { tableId, status } });
+    }, []),
+    
+    transferTable: useCallback((fromTableId, toTableId) => {
+      dispatch({ type: ACTIONS.TRANSFER_TABLE, payload: { fromTableId, toTableId } });
     }, []),
     
     // Users
