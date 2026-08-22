@@ -57,12 +57,115 @@ export default async function handler(req, res) {
     return;
   }
 
-  const { storeId, name, role, pin } = body || {};
+  const { action = 'provision', storeId, profileId: targetProfileId, name, role, pin } = body || {};
 
   if (!storeId) {
     res.status(400).json({ error: 'storeId is required' });
     return;
   }
+
+  // Service-role client bypasses RLS — keep it out of the browser.
+  const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
+    auth: { autoRefreshToken: false, persistSession: false },
+  });
+
+  // ------------------------------------------------------------------
+  // Authorization: this route holds the service key, so it MUST verify
+  // that the caller is an authenticated, active admin of the store.
+  // The client sends its Supabase access token in the Authorization
+  // header; we validate it and check the store_members row.
+  // ------------------------------------------------------------------
+  const authHeader = req.headers.authorization || '';
+  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
+  if (!token) {
+    res.status(401).json({ error: 'Missing authorization' });
+    return;
+  }
+
+  const { data: caller, error: callerError } = await admin.auth.getUser(token);
+  if (callerError || !caller?.user) {
+    res.status(401).json({ error: 'Invalid authorization' });
+    return;
+  }
+
+  const { data: membership, error: membershipError } = await admin
+    .from('store_members')
+    .select('role, active')
+    .eq('store_id', storeId)
+    .eq('profile_id', caller.user.id)
+    .maybeSingle();
+
+  if (
+    membershipError ||
+    !membership ||
+    membership.role !== 'admin' ||
+    membership.active !== true
+  ) {
+    res.status(403).json({ error: 'Only the store admin can manage staff' });
+    return;
+  }
+
+  // ---- remove: drop the membership and the auth user -------------------
+  if (action === 'remove') {
+    if (!targetProfileId) {
+      res.status(400).json({ error: 'profileId is required' });
+      return;
+    }
+    await admin
+      .from('store_members')
+      .delete()
+      .eq('store_id', storeId)
+      .eq('profile_id', targetProfileId);
+    // Deleting the auth user revokes the PIN everywhere. Best-effort: even if
+    // the auth user is gone already, the membership delete above succeeded.
+    await admin.auth.admin.deleteUser(targetProfileId).catch(() => {});
+    res.status(200).json({ ok: true });
+    return;
+  }
+
+  // ---- update: rename / re-role an existing member ---------------------
+  // Note: PIN resets are intentionally not supported here. Supabase's admin
+  // user-update API enforces the password minimum length (default 6), so a
+  // 4-digit PIN cannot be set on an existing auth user without lowering the
+  // project's Auth password policy. PINs are assigned at creation time only.
+  if (action === 'update') {
+    if (!targetProfileId) {
+      res.status(400).json({ error: 'profileId is required' });
+      return;
+    }
+    if (!name || !String(name).trim()) {
+      res.status(400).json({ error: 'name is required' });
+      return;
+    }
+    if (!VALID_ROLES.has(role)) {
+      res.status(400).json({ error: `role must be one of: ${[...VALID_ROLES].join(', ')}` });
+      return;
+    }
+    const { data: updated, error: updateError } = await admin
+      .from('store_members')
+      .update({ role, display_name: String(name).trim() })
+      .eq('store_id', storeId)
+      .eq('profile_id', targetProfileId)
+      .select('role, display_name')
+      .single();
+
+    if (updateError || !updated) {
+      res.status(500).json({ error: 'Failed to update staff member' });
+      return;
+    }
+    res.status(200).json({
+      ok: true,
+      member: {
+        storeId,
+        profileId: targetProfileId,
+        role: updated.role,
+        displayName: updated.display_name,
+      },
+    });
+    return;
+  }
+
+  // ---- provision (default): create the auth user + membership ----------
   if (!name || !String(name).trim()) {
     res.status(400).json({ error: 'name is required' });
     return;
@@ -75,11 +178,6 @@ export default async function handler(req, res) {
     res.status(400).json({ error: 'pin must be exactly 4 digits' });
     return;
   }
-
-  // Service-role client bypasses RLS — keep it out of the browser.
-  const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
-    auth: { autoRefreshToken: false, persistSession: false },
-  });
 
   // Confirm the store exists and grab a name for the generated email.
   const { data: store, error: storeError } = await admin

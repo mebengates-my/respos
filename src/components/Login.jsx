@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useApp } from '../context/AppContext';
 import { t } from '../data/language';
 import Onboarding from './Onboarding';
+import { isCloudEnabled } from '../services/cloud';
 import {
   Coffee,
   User,
@@ -56,6 +57,12 @@ export default function Login() {
     setPin(value);
     setError('');
   };
+
+  // In a live (cloud) deployment the demo staff picker makes no sense: the seed
+  // PIN users only exist in local mode, they cannot sign in to Supabase. New
+  // customers and their staff all enter through the store login screen instead.
+  const showCloudLanding = isCloudEnabled && loginMode === 'staff';
+  const currentYear = new Date().getFullYear();
   
   // One section per role, in order of responsibility.
   const roleSections = [
@@ -100,7 +107,7 @@ export default function Login() {
         </div>
       </div>
       
-      <div className="w-full max-w-4xl">
+      <div className={showCloudLanding ? 'w-full max-w-md' : 'w-full max-w-4xl'}>
         {/* Header */}
         <div className="text-center mb-8">
           <motion.div
@@ -123,7 +130,7 @@ export default function Login() {
             transition={{ delay: 0.2 }}
             className="text-latte text-lg"
           >
-            {t('selectRole', language)}
+            {showCloudLanding ? t('cloudLandingHint', language) : t('selectRole', language)}
           </motion.p>
         </div>
         
@@ -134,7 +141,22 @@ export default function Login() {
           transition={{ delay: 0.3 }}
           className="bg-white rounded-3xl shadow-2xl overflow-hidden"
         >
-          {!selectedUser ? (
+          {showCloudLanding ? (
+            /* Cloud deployment landing: everyone (owner + staff) enters via the store login */
+            <div className="p-8">
+              <button
+                onClick={() => setLoginMode('cloud')}
+                className="w-full flex items-center justify-center gap-2 px-5 py-4 bg-accent text-white rounded-xl font-semibold hover:bg-accent/90 transition-colors"
+              >
+                <Store className="w-5 h-5" />
+                {t('storeLogin', language)}
+              </button>
+              <p className="text-center text-sm text-medium-roast mt-5 leading-relaxed">
+                {t('staffSignInNote', language)}
+              </p>
+            </div>
+          ) : (
+          !selectedUser ? (
             <div className="p-8 space-y-8">
               {roleSections.map(({ role, icon: RoleIcon, iconWrap, avatar, users: roleUsers }) => (
                 <div key={role}>
@@ -254,20 +276,22 @@ export default function Login() {
                 </div>
               </div>
             </div>
-          )}
+          ))}
         </motion.div>
         
         {/* Footer */}
         <div className="text-center mt-6 space-y-3">
-          <button
-            onClick={() => setLoginMode('cloud')}
-            className="inline-flex items-center gap-2 px-5 py-2.5 bg-white/10 backdrop-blur-sm rounded-xl text-white hover:bg-white/20 transition-colors"
-          >
-            <Store className="w-4 h-4" />
-            <span className="text-sm font-medium">{t('storeLogin', language)}</span>
-          </button>
+          {!showCloudLanding && (
+            <button
+              onClick={() => setLoginMode('cloud')}
+              className="inline-flex items-center gap-2 px-5 py-2.5 bg-white/10 backdrop-blur-sm rounded-xl text-white hover:bg-white/20 transition-colors"
+            >
+              <Store className="w-4 h-4" />
+              <span className="text-sm font-medium">{t('storeLogin', language)}</span>
+            </button>
+          )}
           <p className="text-latte/60 text-sm">
-            © 2024 Café POS System
+            {t('copyright', language).replace('{year}', String(currentYear))}
           </p>
         </div>
       </div>

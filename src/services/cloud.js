@@ -6,6 +6,10 @@ import {
   mockSignOut,
   mockRegisterStore,
   mockListMyStores,
+  mockListStoreMembers,
+  mockUpdateStoreMember,
+  mockRemoveStoreMember,
+  mockCreateMember,
 } from './cloudMock';
 
 // Cloud mode is enabled only when Supabase credentials are provided via env.
@@ -136,4 +140,94 @@ export const cloudAuth = {
       }));
     return { data: stores, error: null };
   },
+
+  // Current Supabase session access token, or null when signed out / in mock mode.
+  // Sent as `Authorization: Bearer <token>` so the serverless provisioning route
+  // can verify the caller is really a store admin before using the service key.
+  async getAccessToken() {
+    if (!isCloudEnabled) return null;
+    const { data } = await supabase.auth.getSession();
+    return data?.session?.access_token || null;
+  },
+
+  // All staff of a store, as app-shaped user records (same shape the User
+  // Management view already renders for local users). RLS lets any member read
+  // the roster; only admins get the manage buttons.
+  async listStoreMembers(storeId) {
+    if (!isCloudEnabled) return mockListStoreMembers(storeId);
+    const { data, error } = await supabase
+      .from('store_members')
+      .select('store_id, profile_id, role, display_name, pin, active, profiles(email)')
+      .eq('store_id', storeId);
+    if (error) return { data: null, error };
+    return {
+      data: (data || []).map((m) => ({
+        id: m.profile_id,
+        name: m.display_name || '',
+        role: m.role,
+        pin: m.pin || '',
+        active: m.active !== false,
+        cloud: true,
+        storeId: m.store_id,
+        email: m.profiles?.email || '',
+      })),
+      error: null,
+    };
+  },
+
+  // Create a staff account (auth user + membership) through the Vercel
+  // serverless route, which holds the service-role key.
+  async provisionStaff({ storeId, name, role, pin }) {
+    if (!isCloudEnabled) {
+      const slug = String(name || 'staff').toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 24) || 'staff';
+      const { data, error } = await mockCreateMember({ storeId, displayName: name, role, email: `${slug}@staff.internal`, password: pin });
+      if (error || !data?.user) return { data: null, error: error || { message: 'Failed to add staff member' } };
+      return {
+        data: { storeId, profileId: data.user.id, role, displayName: name, email: data.user.email },
+        error: null,
+      };
+    }
+    return callProvisionApi({ action: 'provision', storeId, name, role, pin });
+  },
+
+  // Update a member's name/role and optionally reset their PIN (password).
+  async updateStoreMember({ storeId, profileId, displayName, role, pin }) {
+    if (!isCloudEnabled) {
+      return mockUpdateStoreMember({ storeId, profileId, displayName, role, pin });
+    }
+    return callProvisionApi({ action: 'update', storeId, profileId, name: displayName, role, pin });
+  },
+
+  // Remove a member (drops the membership and the auth user, so their PIN no
+  // longer signs them in anywhere).
+  async removeStoreMember({ storeId, profileId }) {
+    if (!isCloudEnabled) {
+      return mockRemoveStoreMember({ storeId, profileId });
+    }
+    return callProvisionApi({ action: 'remove', storeId, profileId });
+  },
 };
+
+// POST to the serverless staff-provisioning route. On Vercel `/api/*` is
+// handled natively; in local dev the Vite dev server serves the same route
+// via a middleware (see vite.config.js).
+async function callProvisionApi(body) {
+  const token = await cloudAuth.getAccessToken();
+  try {
+    const res = await fetch('/api/provision-staff', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify(body),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      return { data: null, error: { message: json.error || 'Request failed' } };
+    }
+    return { data: json.member || { ok: true }, error: null };
+  } catch (err) {
+    return { data: null, error: { message: err?.message || 'Network error' } };
+  }
+}

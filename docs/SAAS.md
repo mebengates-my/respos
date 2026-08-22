@@ -67,8 +67,14 @@ Orders board updates live from every tablet/phone in the store.
       `src/services/cloudMock.js`, swapped for real Supabase automatically
       once the env vars are present)
 - [x] Vercel API route for staff provisioning (`api/provision-staff.js` —
-      service key, creates auth users + PINs + `store_members` rows)
-- [ ] Sync layer: menu, tables, users, expenses, settings ⇄ Supabase
+      service key, creates auth users + PINs + `store_members` rows; also
+      supports `update` and `remove`, and requires the caller's Supabase
+      access token so only the store admin can manage staff)
+- [x] Admin → User Management wired to Supabase in cloud mode: lists real
+      `store_members` (no more demo users), provisions/updates/removes staff
+      through the route. The local demo staff picker on the Login screen is
+      hidden when the app runs in cloud mode.
+- [ ] Sync layer: menu, tables, expenses, settings ⇄ Supabase
 - [ ] Orders over Supabase + realtime Open Orders & table status
 - [ ] Offline outbox: queue changes locally when the connection drops
 - [ ] Billing (e.g. Stripe) + plan limits per store
@@ -84,9 +90,9 @@ layer runs against an **in-browser mock** (`src/services/cloudMock.js`):
    store's **admin** and land in the Admin Panel.
 4. A cloud session (`cafe-pos-session-cloud`) persists across refresh and is
    re-validated on load, exactly like the real backend.
-5. To test staff sign-in, switch to the same device's other tab or use
-   `src/services/cloudMock.js` (e.g. `mockCreateMember`) to provision a
-   manager/server, then sign in with that generated email + PIN.
+5. To test staff sign-in, open **Admin Panel → User Management** and add a
+   manager/server (this provisions a real mock user with the 4-digit PIN),
+   then sign in with that generated email + PIN via **Store login**.
 
 Nothing about the UI changes when the real backend arrives — set
 `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY` in `.env.local` and the mock is
@@ -101,8 +107,27 @@ server-side only:
 
 - Env vars on Vercel: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`
   (Project Settings → API → `service_role` — never expose this to the client).
-- Call it with `POST { storeId, name, role, pin }` where `role` is
-  `admin | manager | server` and `pin` is exactly 4 digits.
+- Call it with `POST /api/provision-staff` and
+  `Authorization: Bearer <caller's Supabase access token>` — the route
+  verifies the caller is an **active admin** of `storeId` (401/403 otherwise),
+  so a leaked URL can't be used to add staff to a store you don't admin.
+- Body by action:
+  - `{ action: 'provision', storeId, name, role, pin }` — default; creates the
+    auth user (generated email, 4-digit PIN as password, pre-confirmed) +
+    `store_members` row. `role` is `admin | manager | server`, `pin` is
+    exactly 4 digits.
+  - `{ action: 'update', storeId, profileId, name, role }` — rename / re-role.
+    PIN resets are intentionally not supported: Supabase's admin user-update
+    API enforces the password minimum (default 6), so a 4-digit PIN can't be
+    assigned to an existing auth user without lowering the project's Auth
+    password policy. PINs are set at creation only.
+  - `{ action: 'remove', storeId, profileId }` — deletes the membership and
+    the auth user, revoking the PIN everywhere.
+
+Local dev: `npm run dev` serves the same route via a Vite middleware
+(`vite.config.js`) so provisioning works without Vercel. It reads
+`SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY` from `.env.local` (server-side
+only).
 
 ## Security notes
 

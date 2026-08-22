@@ -234,7 +234,9 @@ export default function Onboarding({ onBack }) {
           className="flex items-center gap-2 text-latte/80 hover:text-white mb-6 transition-colors"
         >
           <ArrowLeft className="w-4 h-4" />
-          <span className="text-sm">{t('backToPinLogin', language)}</span>
+          {/* In mock mode the staff PIN login is behind this screen; in a real
+              cloud deployment it just returns to the store login landing. */}
+          <span className="text-sm">{isDemoMode ? t('backToPinLogin', language) : t('back', language)}</span>
         </button>
 
         {/* Mode badge */}
@@ -534,7 +536,7 @@ export default function Onboarding({ onBack }) {
         </motion.div>
 
         <p className="text-center text-latte/60 text-sm mt-6">
-          © 2024 Café POS System
+          {t('copyright', language).replace('{year}', String(new Date().getFullYear()))}
         </p>
       </div>
     </div>

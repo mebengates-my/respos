@@ -60,6 +60,12 @@ export const translations = {
     demoModeHint: 'Running on an in-browser mock — add the Supabase env vars to go live.',
     cloudConnected: 'Cloud connected',
     continueToStore: 'Open store',
+    cloudLandingHint: 'Sign in to your store to take orders, manage tables, staff and reports.',
+    staffSignInNote: 'Staff sign in with their store email and 4-digit PIN.',
+    loadingMembers: 'Loading staff…',
+    staffEmpty: 'No staff yet. Add your first team member.',
+    pinOptionalHint: 'The PIN is set when the account is created and cannot be changed later.',
+    copyright: '© {year} Café POS System',
     
     // Navigation
     pos: 'POS',
@@ -295,6 +301,12 @@ export const translations = {
     demoModeHint: 'ব্রাউজারে মক চলছে — লাইভ করতে সুপাবেস এনভি ভেরিয়েবল যোগ করুন।',
     cloudConnected: 'ক্লাউড সংযুক্ত',
     continueToStore: 'স্টোর খুলুন',
+    cloudLandingHint: 'আপনার স্টোরে সাইন ইন করে অর্ডার নিন, টেবিল, স্টাফ ও রিপোর্ট পরিচালনা করুন।',
+    staffSignInNote: 'স্টাফরা তাদের স্টোর ইমেইল এবং ৪ সংখ্যার পিন দিয়ে লগইন করেন।',
+    loadingMembers: 'স্টাফ লোড হচ্ছে…',
+    staffEmpty: 'এখনো কোনো স্টাফ নেই। আপনার প্রথম টিম সদস্য যোগ করুন।',
+    pinOptionalHint: 'অ্যাকাউন্ট তৈরি করার সময় পিন সেট করা হয়; পরে পরিবর্তন করা যায় না।',
+    copyright: '© {year} ক্যাফে পিওএস সিস্টেম',
     
     // Navigation
     pos: 'পিওএস',

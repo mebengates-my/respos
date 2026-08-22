@@ -5,6 +5,7 @@ import { loadStoreSettings, saveStoreSettings } from '../data/storeSettings';
 import { downloadSalesReportPdf } from '../utils/pdfReport';
 import { formatElapsedTime } from '../utils/helpers';
 import { useConfirm } from './ConfirmDialog';
+import { cloudAuth } from '../services/cloud';
 import {
   LayoutDashboard,
   Users,
@@ -68,7 +69,36 @@ export default function AdminPanel() {
   const isManager = currentUser?.role === 'manager';
   // Start every management session on the operational overview rather than Settings.
   const [currentView, setCurrentView] = useState(AdminViews.DASHBOARD);
-  
+
+  // Cloud (Supabase) mode: staff are real auth users, not the local demo list.
+  // Fetch the store roster once so Dashboard and User Management show the truth
+  // instead of the localStorage seed users. Local mode ignores all of this.
+  const isCloudUser = Boolean(currentUser?.cloud);
+  const cloudStoreId = currentUser?.storeId || state.cloudSession?.storeId || null;
+  const [cloudMembers, setCloudMembers] = useState(null); // null = not loaded yet
+  const [cloudMembersLoading, setCloudMembersLoading] = useState(false);
+  const [cloudMembersVersion, setCloudMembersVersion] = useState(0);
+
+  useEffect(() => {
+    if (!isCloudUser || !cloudStoreId) return;
+    let cancelled = false;
+    setCloudMembersLoading(true);
+    cloudAuth.listStoreMembers(cloudStoreId).then(({ data, error }) => {
+      if (cancelled) return;
+      setCloudMembers(error ? [] : (data || []));
+      setCloudMembersLoading(false);
+      if (error) {
+        actions.addToast(error.message || t('error', language), 'error');
+      }
+    });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isCloudUser, cloudStoreId, cloudMembersVersion]);
+
+  const userCount = isCloudUser
+    ? (cloudMembers ? cloudMembers.length : '…')
+    : users.length;
+
   const navItems = [
     { id: AdminViews.DASHBOARD, icon: LayoutDashboard, label: t('dashboard', language) },
     { id: AdminViews.OPEN_ORDERS, icon: ClipboardList, label: t('openOrders', language) },
@@ -161,9 +191,18 @@ export default function AdminPanel() {
       
       {/* Main Content */}
       <main className="flex-1 overflow-auto">
-        {currentView === AdminViews.DASHBOARD && <DashboardView language={language} state={state} />}
+        {currentView === AdminViews.DASHBOARD && <DashboardView language={language} state={state} userCount={userCount} />}
         {currentView === AdminViews.OPEN_ORDERS && <OpenOrdersView language={language} state={state} />}
-        {currentView === AdminViews.USERS && !isManager && <UsersView language={language} state={state} actions={actions} />}
+        {currentView === AdminViews.USERS && !isManager && (
+          <UsersView
+            language={language}
+            state={state}
+            actions={actions}
+            cloudMembers={cloudMembers}
+            cloudMembersLoading={cloudMembersLoading}
+            reloadCloudMembers={() => setCloudMembersVersion(v => v + 1)}
+          />
+        )}
         {currentView === AdminViews.CATEGORIES && <CategoriesView language={language} state={state} actions={actions} />}
         {currentView === AdminViews.MENU_ITEMS && <MenuItemsView language={language} state={state} actions={actions} />}
         {currentView === AdminViews.TABLES && <TablesView language={language} state={state} actions={actions} />}
@@ -178,8 +217,8 @@ export default function AdminPanel() {
 }
 
 // Dashboard
-function DashboardView({ language, state }) {
-  const { orderHistory, users, tables } = state;
+function DashboardView({ language, state, userCount }) {
+  const { orderHistory, tables } = state;
   const today = new Date().setHours(0, 0, 0, 0);
   const todayOrders = orderHistory.filter(o => o.paidAt >= today);
   const todaySales = todayOrders.reduce((sum, o) => sum + o.total, 0);
@@ -196,7 +235,7 @@ function DashboardView({ language, state }) {
           { label: t('today', language), value: formatPrice(todaySales), icon: DollarSign, color: 'text-success', bg: 'bg-success/10' },
           { label: t('thisWeek', language), value: formatPrice(weekSales), icon: TrendingUp, color: 'text-accent', bg: 'bg-accent/10' },
           { label: t('thisMonth', language), value: formatPrice(monthSales), icon: BarChart3, color: 'text-espresso', bg: 'bg-espresso/10' },
-          { label: t('users', language), value: users.length.toString(), icon: Users, color: 'text-medium-roast', bg: 'bg-medium-roast/10' },
+          { label: t('users', language), value: String(userCount), icon: Users, color: 'text-medium-roast', bg: 'bg-medium-roast/10' },
         ].map((stat, i) => (
           <motion.div key={stat.label} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.1 }} className="bg-white rounded-2xl p-6 shadow-sm">
             <div className={`w-12 h-12 ${stat.bg} rounded-xl flex items-center justify-center ${stat.color} mb-4`}><stat.icon className="w-6 h-6" /></div>
@@ -337,40 +376,125 @@ function OpenOrdersView({ language, state }) {
 }
 
 // Users View
-function UsersView({ language, state, actions }) {
+// Local mode: manages the localStorage staff list (PIN login).
+// Cloud mode: lists the real Supabase store members and manages them through
+// the serverless provisioning route (auth users + store_members rows).
+function UsersView({ language, state, actions, cloudMembers, cloudMembersLoading, reloadCloudMembers }) {
   const { users } = state;
+  const isCloud = Boolean(state.currentUser?.cloud);
+  const storeId = state.currentUser?.storeId || state.cloudSession?.storeId || null;
+  const list = isCloud ? (cloudMembers || []) : users;
   const confirm = useConfirm();
   const [showModal, setShowModal] = useState(false);
   const [editingUser, setEditingUser] = useState(null);
   const [formData, setFormData] = useState({ name: '', role: 'server', pin: '' });
-  
-  const handleSubmit = () => {
-    if (!formData.name || !formData.pin) return;
-    if (editingUser) { actions.updateUser(editingUser.id, formData); }
-    else { actions.addUser(formData); }
+  const [saving, setSaving] = useState(false);
+
+  const openAdd = () => {
+    setEditingUser(null);
+    setFormData({ name: '', role: 'server', pin: '' });
+    setShowModal(true);
+  };
+
+  const openEdit = (user) => {
+    setEditingUser(user);
+    // In cloud mode the PIN is the staff member's password and can only be set
+    // at creation; the edit form therefore only sends name + role.
+    setFormData({ name: user.name, role: user.role, pin: isCloud ? '' : user.pin });
+    setShowModal(true);
+  };
+
+  const handleSubmit = async () => {
+    if (!formData.name) return;
+
+    // Local mode — unchanged behaviour.
+    if (!isCloud) {
+      if (!formData.pin || formData.pin.length !== 4) return;
+      if (editingUser) { actions.updateUser(editingUser.id, formData); }
+      else { actions.addUser(formData); }
+      setShowModal(false);
+      setEditingUser(null);
+      setFormData({ name: '', role: 'server', pin: '' });
+      return;
+    }
+
+    // Cloud mode — provision through the service-role route.
+    if (!storeId) return;
+    if (!editingUser && (!formData.pin || formData.pin.length !== 4)) return;
+    setSaving(true);
+    const result = editingUser
+      ? await cloudAuth.updateStoreMember({
+          storeId,
+          profileId: editingUser.id,
+          displayName: formData.name,
+          role: formData.role,
+        })
+      : await cloudAuth.provisionStaff({
+          storeId,
+          name: formData.name,
+          role: formData.role,
+          pin: formData.pin,
+        });
+    setSaving(false);
+    if (result.error) {
+      actions.addToast(result.error.message || t('error', language), 'error');
+      return;
+    }
+    actions.addToast(
+      editingUser ? t('userUpdated', language) : t('userAdded', language),
+      'success'
+    );
     setShowModal(false);
     setEditingUser(null);
     setFormData({ name: '', role: 'server', pin: '' });
+    reloadCloudMembers();
   };
-  
+
+  const handleDelete = async (user) => {
+    const ok = await confirm({
+      title: t('deleteUser', language),
+      message: t('confirmDelete', language),
+      confirmLabel: t('delete', language),
+      danger: true,
+    });
+    if (!ok) return;
+    if (!isCloud) { actions.deleteUser(user.id); return; }
+    if (!storeId) return;
+    const result = await cloudAuth.removeStoreMember({ storeId, profileId: user.id });
+    if (result.error) {
+      actions.addToast(result.error.message || t('error', language), 'error');
+      return;
+    }
+    actions.addToast(t('userDeleted', language), 'success');
+    reloadCloudMembers();
+  };
+
+  const canSave = isCloud
+    ? Boolean(formData.name) && (editingUser ? true : formData.pin.length === 4)
+    : Boolean(formData.name) && formData.pin.length === 4;
+
   return (
     <div className="p-6">
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-2xl font-display font-bold text-dark-roast">{t('userManagement', language)}</h1>
-        <button onClick={() => { setEditingUser(null); setFormData({ name: '', role: 'server', pin: '' }); setShowModal(true); }} className="flex items-center gap-2 px-4 py-2 bg-accent text-white rounded-xl"><Plus className="w-5 h-5" /> {t('addUser', language)}</button>
+        <button onClick={openAdd} className="flex items-center gap-2 px-4 py-2 bg-accent text-white rounded-xl"><Plus className="w-5 h-5" /> {t('addUser', language)}</button>
       </div>
       <div className="bg-white rounded-2xl shadow-sm overflow-hidden">
         <table className="w-full">
-          <thead className="bg-cream"><tr><th className="px-6 py-4 text-left text-sm font-semibold">{t('userName', language)}</th><th className="px-6 py-4 text-left text-sm font-semibold">{t('userRole', language)}</th><th className="px-6 py-4 text-left text-sm font-semibold">{t('userPin', language)}</th><th className="px-6 py-4 text-right text-sm font-semibold">Actions</th></tr></thead>
+          <thead className="bg-cream"><tr><th className="px-6 py-4 text-left text-sm font-semibold">{t('userName', language)}</th><th className="px-6 py-4 text-left text-sm font-semibold">{t('userRole', language)}</th><th className="px-6 py-4 text-left text-sm font-semibold">{isCloud ? t('email', language) : t('userPin', language)}</th><th className="px-6 py-4 text-right text-sm font-semibold">Actions</th></tr></thead>
           <tbody>
-            {users.map(user => (
+            {isCloud && cloudMembersLoading && list.length === 0 ? (
+              <tr><td colSpan="4" className="px-6 py-8 text-center text-medium-roast">{t('loadingMembers', language)}</td></tr>
+            ) : list.length === 0 ? (
+              <tr><td colSpan="4" className="px-6 py-8 text-center text-medium-roast">{isCloud ? t('staffEmpty', language) : t('noData', language)}</td></tr>
+            ) : list.map(user => (
               <tr key={user.id} className="border-t border-latte/10 hover:bg-cream/50">
-                <td className="px-6 py-4"><div className="flex items-center gap-3"><div className={`w-10 h-10 rounded-xl flex items-center justify-center ${user.role === 'admin' ? 'bg-espresso' : user.role === 'manager' ? 'bg-accent' : 'bg-success'}`}><Users className="w-5 h-5 text-white" /></div><span className="font-medium">{user.name}</span></div></td>
+                <td className="px-6 py-4"><div className="flex items-center gap-3"><div className={`w-10 h-10 rounded-xl flex items-center justify-center ${user.role === 'admin' ? 'bg-espresso' : user.role === 'manager' ? 'bg-accent' : 'bg-success'}`}><Users className="w-5 h-5 text-white" /></div><div><div className="font-medium">{user.name}</div>{isCloud && user.email ? <div className="text-xs text-medium-roast">{user.email}</div> : null}</div></div></td>
                 <td className="px-6 py-4"><span className={`px-3 py-1 rounded-full text-sm font-medium ${user.role === 'admin' ? 'bg-espresso/10 text-espresso' : user.role === 'manager' ? 'bg-accent/10 text-accent' : 'bg-success/10 text-success'}`}>{t(user.role, language)}</span></td>
-                <td className="px-6 py-4 font-mono text-medium-roast">••••</td>
+                <td className="px-6 py-4 font-mono text-medium-roast">{isCloud ? (user.email || '—') : '••••'}</td>
                 <td className="px-6 py-4"><div className="flex justify-end gap-2">
-                  <button onClick={() => { setEditingUser(user); setFormData({ name: user.name, role: user.role, pin: user.pin }); setShowModal(true); }} className="p-2 hover:bg-latte/20 rounded-lg"><Edit className="w-4 h-4 text-medium-roast" /></button>
-                  <button onClick={async () => { if (await confirm({ title: t('deleteUser', language), message: t('confirmDelete', language), confirmLabel: t('delete', language), danger: true })) { actions.deleteUser(user.id); } }} className="p-2 hover:bg-error/10 rounded-lg"><Trash2 className="w-4 h-4 text-error" /></button>
+                  <button onClick={() => openEdit(user)} className="p-2 hover:bg-latte/20 rounded-lg"><Edit className="w-4 h-4 text-medium-roast" /></button>
+                  <button onClick={() => handleDelete(user)} className="p-2 hover:bg-error/10 rounded-lg"><Trash2 className="w-4 h-4 text-error" /></button>
                 </div></td>
               </tr>
             ))}
@@ -385,9 +509,13 @@ function UsersView({ language, state, actions }) {
             <div className="space-y-4">
               <div><label className="block text-sm font-medium text-medium-roast mb-2">{t('userName', language)}</label><input type="text" value={formData.name} onChange={e => setFormData({ ...formData, name: e.target.value })} className="w-full px-4 py-3 bg-cream border border-latte/30 rounded-xl focus:outline-none focus:border-accent" /></div>
               <div><label className="block text-sm font-medium text-medium-roast mb-2">{t('userRole', language)}</label><div className="grid grid-cols-3 gap-3">{['admin', 'manager', 'server'].map(role => (<button key={role} onClick={() => setFormData({ ...formData, role })} className={`px-4 py-3 rounded-xl font-medium ${formData.role === role ? 'bg-accent text-white' : 'bg-cream'}`}>{t(role, language)}</button>))}</div></div>
-              <div><label className="block text-sm font-medium text-medium-roast mb-2">{t('userPin', language)} (4 digits)</label><input type="text" value={formData.pin} onChange={e => setFormData({ ...formData, pin: e.target.value.replace(/[^0-9]/g, '').slice(0, 4) })} className="w-full px-4 py-3 bg-cream border border-latte/30 rounded-xl focus:outline-none focus:border-accent font-mono" maxLength={4} /></div>
+              {!(isCloud && editingUser) ? (
+                <div><label className="block text-sm font-medium text-medium-roast mb-2">{t('userPin', language)} (4 digits)</label><input type="text" value={formData.pin} onChange={e => setFormData({ ...formData, pin: e.target.value.replace(/[^0-9]/g, '').slice(0, 4) })} className="w-full px-4 py-3 bg-cream border border-latte/30 rounded-xl focus:outline-none focus:border-accent font-mono" maxLength={4} /></div>
+              ) : (
+                <p className="text-sm text-medium-roast bg-cream rounded-xl px-4 py-3">{t('pinOptionalHint', language)}</p>
+              )}
             </div>
-            <div className="flex gap-3 mt-6"><button onClick={() => setShowModal(false)} className="flex-1 py-3 bg-latte/10 rounded-xl font-medium">{t('cancel', language)}</button><button onClick={handleSubmit} disabled={!formData.name || formData.pin.length !== 4} className="flex-1 py-3 bg-accent text-white rounded-xl font-medium disabled:opacity-50">{t('save', language)}</button></div>
+            <div className="flex gap-3 mt-6"><button onClick={() => setShowModal(false)} className="flex-1 py-3 bg-latte/10 rounded-xl font-medium">{t('cancel', language)}</button><button onClick={handleSubmit} disabled={!canSave || saving} className="flex-1 py-3 bg-accent text-white rounded-xl font-medium disabled:opacity-50">{saving ? t('loading', language) : t('save', language)}</button></div>
           </motion.div>
         </motion.div>
       )}</AnimatePresence>
