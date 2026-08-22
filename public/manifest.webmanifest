@@ -1,0 +1,26 @@
+{
+  "name": "Café POS",
+  "short_name": "Café POS",
+  "description": "Point of sale for cafés and restaurants — orders, tables, payments, reports, expenses.",
+  "id": "cafe-pos",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#FFF8F0",
+  "theme_color": "#5D4037",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ]
+}

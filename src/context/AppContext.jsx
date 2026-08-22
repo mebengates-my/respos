@@ -85,6 +85,7 @@ const ACTIONS = {
   
   // Data
   LOAD_SAVED_STATE: 'LOAD_SAVED_STATE',
+  IMPORT_BACKUP: 'IMPORT_BACKUP',
 };
 
 // localStorage key holding the signed-in user. Only the user id is stored; the full
@@ -703,7 +704,8 @@ function appReducer(state, action) {
     case ACTIONS.SET_NETWORK_STATUS:
       return { ...state, isOffline: action.payload };
     
-    // Data persistence
+    // Data persistence (IMPORT_BACKUP is a full replace using the same shape)
+    case ACTIONS.IMPORT_BACKUP:
     case ACTIONS.LOAD_SAVED_STATE: {
       const next = { ...state, ...action.payload };
       // Keep the signed-in user in step with the (possibly newer) users list coming
@@ -936,6 +938,12 @@ export function AppProvider({ children }) {
     // Users
     addUser: useCallback((data) => {
       dispatch({ type: ACTIONS.ADD_USER, payload: data });
+    }, []),
+    
+    // Backup: replace all shared state with a validated backup file. The normal
+    // auto-save effect then persists the imported data to localStorage.
+    importBackup: useCallback((savedState) => {
+      dispatch({ type: ACTIONS.IMPORT_BACKUP, payload: getPersistedState(savedState || {}) });
     }, []),
     
     updateUser: useCallback((id, updates) => {

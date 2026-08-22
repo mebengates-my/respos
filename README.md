@@ -29,13 +29,17 @@ npm run preview
 - **Expenses:** Admins and Managers get an Expenses menu with two sub-menus — *Expense Categories* (create/rename/delete cost categories) and *Expenses* (record expenses into a category with a description, amount, and a date & time picker that defaults to now; list can be filtered by category and period). Deleting a category also removes the expenses inside it (confirmed first).
 - **Profit & Loss:** Admins and Managers get a P&L view with range presets (Today, Yesterday, Last 7 Days, Last 30 Days, custom) showing Total Sales, Total Expenses, Net Profit/Loss, and profit margin as KPIs, plus a daily Sales-vs-Expenses chart, an expenses-by-category breakdown, and best-day insights.
 - **Menu items:** tapping anywhere on a menu item card adds it to the order; the + icon still works as before.
-- **Local persistence:** menus, categories, table state, staff, held orders, and order history are saved together in `localStorage`. Editing a category or menu item survives a refresh and does not leave menu items pointing at missing categories.
+- **Local persistence:** menus, categories, table state, staff, held orders, order history, expense categories, and expenses are saved together in `localStorage`. Editing a category or menu item survives a refresh and does not leave menu items pointing at missing categories.
+- **Backup & Restore:** because all data lives in the device's browser storage, Admin → Settings includes **Download backup** (one JSON file with everything, including store settings) and **Restore from backup** so data can be moved to a new device or recovered after browser data is cleared. Keep backup copies off the device (cloud drive / email / USB).
+- **Tablets & phones:** the POS is responsive — on small screens the menu and order panels stack vertically — and the app is installable as a PWA (manifest + icon); after one online visit the service worker lets it reopen offline.
 - **Offline use:** production builds register a small service worker. After the app has been visited online, its application shell can reopen offline; local POS data and normal order actions continue to work on that device. The header reflects the browser's real online/offline event state.
 - **Same-device tabs:** browser storage events keep separate tabs open on the same browser profile aligned.
 
 ## Important production requirement: shared users and cloud sync
 
 This repository is currently a client-only application. `localStorage` is private to one browser profile, so it **does not provide shared real-time data for employees on separate phones, tablets, or computers**. It also has no remote destination to which offline changes can automatically sync.
+
+Note that a local SQLite file would **not** solve this either — it would still live (and die) on the same machine. Protection against device loss requires data to exist somewhere off the device: either the manual Backup & Restore file above, or a shared backend.
 
 Before using it with multiple staff in production, add a secure backend and database (for example a REST/GraphQL API with PostgreSQL) with:
 

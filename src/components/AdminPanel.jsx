@@ -38,7 +38,9 @@ import {
   Wallet,
   Tags,
   TrendingDown,
-  CalendarDays
+  CalendarDays,
+  Upload,
+  Database
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -701,6 +703,66 @@ function StoreSettingsView({ language, state, actions }) {
     }
   };
   
+  // Download every piece of shared data as one JSON file so it can be restored on
+  // another device if this machine is lost, broken, or its browser data is cleared.
+  const handleBackupExport = () => {
+    const payload = {
+      app: 'cafe-pos',
+      exportedAt: new Date().toISOString(),
+      menuDataVersion: state.menuDataVersion,
+      tables: state.tables,
+      orderHistory: state.orderHistory,
+      heldOrders: state.heldOrders,
+      categories: state.categories,
+      menuItems: state.menuItems,
+      selectedCategory: state.selectedCategory,
+      users: state.users,
+      language: state.language,
+      expenseCategories: state.expenseCategories,
+      expenses: state.expenses,
+      storeSettings: settings,
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `cafe-pos-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    actions.addToast('Backup downloaded', 'success');
+  };
+  
+  const handleBackupImport = (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async () => {
+      let data;
+      try {
+        data = JSON.parse(reader.result);
+        if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('invalid');
+      } catch {
+        actions.addToast('Invalid backup file', 'error');
+        return;
+      }
+      const ok = await confirm({
+        title: 'Restore from backup?',
+        message: 'This will REPLACE all data on this device (orders, menu, tables, staff, expenses, settings) with the backup contents. You may need to sign in again afterwards.',
+        confirmLabel: 'Restore',
+        danger: true,
+      });
+      if (!ok) return;
+      actions.importBackup(data);
+      if (data.storeSettings && typeof data.storeSettings === 'object') {
+        saveStoreSettings(data.storeSettings);
+        setSettings(loadStoreSettings());
+      }
+      actions.addToast('Backup restored', 'success');
+    };
+    reader.readAsText(file);
+  };
+  
   return (
     <div className="p-6">
       <div className="flex items-center justify-between mb-6">
@@ -857,6 +919,32 @@ function StoreSettingsView({ language, state, actions }) {
             <div className="flex gap-4">
               <button onClick={() => actions.setLanguage('en')} className={`flex-1 py-4 rounded-xl font-medium flex items-center justify-center gap-2 ${state.language === 'en' ? 'bg-accent text-white' : 'bg-cream hover:bg-latte/20'}`}>🇬🇧 English</button>
               <button onClick={() => actions.setLanguage('bn')} className={`flex-1 py-4 rounded-xl font-medium flex items-center justify-center gap-2 ${state.language === 'bn' ? 'bg-accent text-white' : 'bg-cream hover:bg-latte/20'}`}>🇧🇩 বাংলা</button>
+            </div>
+          </div>
+        </div>
+        
+        {/* Backup & Restore */}
+        <div className="bg-white rounded-2xl shadow-sm overflow-hidden">
+          <div className="p-4 bg-latte/20">
+            <h2 className="font-semibold flex items-center gap-2"><Database className="w-5 h-5" /> Backup & Restore</h2>
+          </div>
+          <div className="p-6 space-y-4">
+            <p className="text-sm text-medium-roast">
+              All data (orders, menu, tables, staff, expenses, settings) lives in this
+              device's browser storage. Download a backup regularly and keep it somewhere
+              safe (cloud drive, email, USB) — if this device is lost, broken, or its
+              browser data is cleared, you can restore everything onto a new device.
+            </p>
+            <div className="flex flex-wrap gap-3">
+              <button onClick={handleBackupExport} className="flex items-center gap-2 px-4 py-3 bg-espresso text-white rounded-xl font-medium hover:bg-espresso/90 transition-colors">
+                <Download className="w-5 h-5" />
+                Download backup (.json)
+              </button>
+              <label className="flex items-center gap-2 px-4 py-3 bg-cream border border-latte/30 text-espresso rounded-xl font-medium hover:bg-latte/20 transition-colors cursor-pointer">
+                <Upload className="w-5 h-5" />
+                Restore from backup
+                <input type="file" accept=".json,application/json" onChange={handleBackupImport} className="hidden" />
+              </label>
             </div>
           </div>
         </div>

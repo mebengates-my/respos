@@ -15,14 +15,14 @@ import { ConfirmProvider } from './components/ConfirmDialog';
 
 function POSView() {
   return (
-    <div className="flex-1 flex overflow-hidden">
-      {/* Menu Panel - Left Side */}
-      <div className="w-2/5 min-w-[400px] border-r border-latte/20">
+    <div className="flex-1 flex flex-col lg:flex-row overflow-hidden">
+      {/* Menu Panel - left side on large screens, top half on phones/tablets */}
+      <div className="h-[46%] lg:h-auto lg:w-2/5 lg:min-w-[400px] border-b lg:border-b-0 lg:border-r border-latte/20">
         <MenuPanel />
       </div>
       
-      {/* Order Panel - Right Side */}
-      <div className="w-3/5 min-w-[400px]">
+      {/* Order Panel - right side on large screens, bottom half on phones/tablets */}
+      <div className="flex-1 lg:w-3/5 lg:min-w-[400px]">
         <OrderPanel />
       </div>
     </div>
