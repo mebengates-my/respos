@@ -35,6 +35,35 @@ npm run preview
 - **Offline use:** production builds register a small service worker. After the app has been visited online, its application shell can reopen offline; local POS data and normal order actions continue to work on that device. The header reflects the browser's real online/offline event state.
 - **Same-device tabs:** browser storage events keep separate tabs open on the same browser profile aligned.
 
+## Cloud / multi-store SaaS (in progress)
+
+The app is being converted from a client-only localStorage demo into a
+multi-store SaaS (Supabase backend, deployed to Vercel). The SaaS foundation
+is scaffolded and the first online features are built:
+
+- **Multi-tenant schema + RLS** (`supabase/schema.sql`) — stores, profiles,
+  store_members, menu, tables, orders and expenses, all scoped by `store_id`,
+  with `register_store()` for owner sign-up and realtime on orders/tables.
+- **Cloud client** (`src/services/cloud.js`) — a `cloudAuth` facade over
+  Supabase Auth + store membership. When `VITE_SUPABASE_URL` /
+  `VITE_SUPABASE_ANON_KEY` are set it talks to your real Supabase project;
+  without them it transparently falls back to an **in-browser mock**
+  (`src/services/cloudMock.js`) so the flow is fully demoable offline.
+- **Owner onboarding** — the Login screen now has a **Store login** button
+  that opens owner sign-up/sign-in, store creation, and store selection. A
+  cloud session persists across refresh (key `cafe-pos-session-cloud`) and
+  re-validates against the backend on load. Signing in as an owner puts you
+  in the Admin/Manager panel; a server membership lands in the POS.
+- **Staff provisioning route** (`api/provision-staff.js`) — a Vercel
+  serverless function that uses the **service-role key** (server-only env)
+  to create a Supabase Auth user (generated email + 4-digit PIN as password)
+  and the `store_members` row. The browser never sees the service key.
+
+To go live: run `supabase/schema.sql` in your Supabase SQL Editor, set
+`VITE_SUPABASE_URL` + `VITE_SUPABASE_ANON_KEY` (client) and, for the staff
+route, `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` (server) as Vercel env
+vars. See `docs/SAAS.md` for the full guide.
+
 ## Important production requirement: shared users and cloud sync
 
 This repository is currently a client-only application. `localStorage` is private to one browser profile, so it **does not provide shared real-time data for employees on separate phones, tablets, or computers**. It also has no remote destination to which offline changes can automatically sync.

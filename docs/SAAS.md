@@ -34,7 +34,9 @@ Vercel (React app, from GitHub)          Supabase
    `npm run dev`.
 5. **Deploy:** push to GitHub → import the repo in https://vercel.com →
    add the same two `VITE_*` env vars under Project → Settings →
-   Environment Variables → Deploy.
+   Environment Variables → Deploy. Also add `SUPABASE_URL` and
+   `SUPABASE_SERVICE_ROLE_KEY` (server-only) for the staff-provisioning
+   route (`api/provision-staff.js`).
 
 ## Sign-up & staff flow (how tenancy works)
 
@@ -60,12 +62,47 @@ Orders board updates live from every tablet/phone in the store.
 
 - [x] Multi-tenant schema + RLS (`supabase/schema.sql`)
 - [x] Cloud client scaffold (`src/services/cloud.js`, env-flagged)
-- [ ] Supabase Auth sign-in/sign-up screens (owner onboarding)
-- [ ] Vercel API route for staff provisioning (service key, creates auth users + PINs)
+- [x] Owner sign-up / sign-in / store-selection screens
+      (`src/components/Onboarding.jsx` — built against an in-browser mock
+      `src/services/cloudMock.js`, swapped for real Supabase automatically
+      once the env vars are present)
+- [x] Vercel API route for staff provisioning (`api/provision-staff.js` —
+      service key, creates auth users + PINs + `store_members` rows)
 - [ ] Sync layer: menu, tables, users, expenses, settings ⇄ Supabase
 - [ ] Orders over Supabase + realtime Open Orders & table status
 - [ ] Offline outbox: queue changes locally when the connection drops
 - [ ] Billing (e.g. Stripe) + plan limits per store
+
+## Try it now (demo mode — no keys required)
+
+Until the owner's Supabase project is provided, everything above the data
+layer runs against an **in-browser mock** (`src/services/cloudMock.js`):
+
+1. `npm run dev`
+2. On the Login screen tap **Store login**.
+3. Create a store (name + your name + email + password). You become the
+   store's **admin** and land in the Admin Panel.
+4. A cloud session (`cafe-pos-session-cloud`) persists across refresh and is
+   re-validated on load, exactly like the real backend.
+5. To test staff sign-in, switch to the same device's other tab or use
+   `src/services/cloudMock.js` (e.g. `mockCreateMember`) to provision a
+   manager/server, then sign in with that generated email + PIN.
+
+Nothing about the UI changes when the real backend arrives — set
+`VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY` in `.env.local` and the mock is
+replaced by Supabase transparently.
+
+## Staff provisioning (Vercel route)
+
+`api/provision-staff.js` creates a staff auth user (generated email like
+`my-cafe-server-8f3k@staff.internal` with the 4-digit PIN as the password)
+plus the `store_members` row. It needs the **service role key**, so it runs
+server-side only:
+
+- Env vars on Vercel: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`
+  (Project Settings → API → `service_role` — never expose this to the client).
+- Call it with `POST { storeId, name, role, pin }` where `role` is
+  `admin | manager | server` and `pin` is exactly 4 digits.
 
 ## Security notes
 
