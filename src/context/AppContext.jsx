@@ -3,9 +3,9 @@ import {
   menuItems as initialMenuItems,
   categories as initialCategories,
   initialTables,
-  staffMembers as initialStaff,
   discountPresets,
-  TAX_RATE
+  TAX_RATE,
+  MENU_DATA_VERSION
 } from '../data/menuData';
 import {
   generateOrderId,
@@ -73,6 +73,7 @@ const ACTIONS = {
   // UI
   ADD_TOAST: 'ADD_TOAST',
   REMOVE_TOAST: 'REMOVE_TOAST',
+  SET_NETWORK_STATUS: 'SET_NETWORK_STATUS',
   
   // Data
   LOAD_SAVED_STATE: 'LOAD_SAVED_STATE',
@@ -97,6 +98,7 @@ const initialState = {
   view: 'pos', // 'pos' | 'tables' | 'reports' | 'admin'
   
   // Menu
+  menuDataVersion: MENU_DATA_VERSION,
   selectedCategory: initialCategories[0]?.id || 'rice',
   categories: initialCategories,
   menuItems: initialMenuItems,
@@ -121,14 +123,53 @@ const initialState = {
   isModifierModalOpen: false,
   selectedMenuItem: null,
   toasts: [],
+  isOffline: typeof navigator !== 'undefined' ? !navigator.onLine : false,
 };
+
+// A previous release persisted categories but not their menu items. That could leave a
+// browser with old café categories while showing the new Bangladesh menu. Only reuse a
+// saved menu when both sides of the relationship were saved using the current schema.
+function getPersistedState(savedState) {
+  const hasCurrentMenuSchema =
+    savedState?.menuDataVersion === MENU_DATA_VERSION &&
+    Array.isArray(savedState.categories) &&
+    Array.isArray(savedState.menuItems) &&
+    savedState.menuItems.every(item =>
+      savedState.categories.some(category => category.id === item.categoryId)
+    );
+
+  const categories = hasCurrentMenuSchema ? savedState.categories : initialCategories;
+  const menuItems = hasCurrentMenuSchema ? savedState.menuItems : initialMenuItems;
+  const categoryIds = new Set(categories.map(category => category.id));
+  const selectedCategory = categoryIds.has(savedState?.selectedCategory)
+    ? savedState.selectedCategory
+    : categories[0]?.id || null;
+
+  return {
+    tables: savedState?.tables || initialTables,
+    orderHistory: savedState?.orderHistory || [],
+    heldOrders: savedState?.heldOrders || [],
+    categories,
+    menuItems,
+    menuDataVersion: MENU_DATA_VERSION,
+    selectedCategory,
+    users: savedState?.users || defaultUsers,
+    language: savedState?.language || 'en',
+  };
+}
 
 // Reducer
 function appReducer(state, action) {
   switch (action.type) {
     // Auth
     case ACTIONS.LOGIN:
-      return { ...state, currentUser: action.payload, isLoggedIn: true };
+      return {
+        ...state,
+        currentUser: action.payload,
+        isLoggedIn: true,
+        // Admins land directly in the Admin Panel; its default tab is Dashboard.
+        view: action.payload.role === 'admin' ? 'admin' : 'pos',
+      };
     
     case ACTIONS.LOGOUT:
       return { ...state, currentUser: null, isLoggedIn: false, view: 'pos', currentOrder: null };
@@ -163,10 +204,14 @@ function appReducer(state, action) {
     }
     
     case ACTIONS.DELETE_CATEGORY: {
+      const categories = state.categories.filter(cat => cat.id !== action.payload);
       return {
         ...state,
-        categories: state.categories.filter(cat => cat.id !== action.payload),
+        categories,
         menuItems: state.menuItems.filter(item => item.categoryId !== action.payload),
+        selectedCategory: state.selectedCategory === action.payload
+          ? categories[0]?.id || null
+          : state.selectedCategory,
       };
     }
     
@@ -565,6 +610,9 @@ function appReducer(state, action) {
         ...state,
         toasts: state.toasts.filter(t => t.id !== action.payload),
       };
+
+    case ACTIONS.SET_NETWORK_STATUS:
+      return { ...state, isOffline: action.payload };
     
     // Data persistence
     case ACTIONS.LOAD_SAVED_STATE:
@@ -579,40 +627,75 @@ function appReducer(state, action) {
 export function AppProvider({ children }) {
   const [state, dispatch] = useReducer(appReducer, initialState);
   
-  // Load saved state on mount
+  // Restore the on-device data. Authentication is deliberately never restored, so a
+  // browser refresh always returns the active user to the PIN screen.
   useEffect(() => {
     const savedState = loadFromStorage('cafe-pos-state', null);
     if (savedState) {
-      dispatch({
-        type: ACTIONS.LOAD_SAVED_STATE,
-        payload: {
-          tables: savedState.tables || initialTables,
-          orderHistory: savedState.orderHistory || [],
-          heldOrders: savedState.heldOrders || [],
-          categories: savedState.categories || initialCategories,
-          users: savedState.users || defaultUsers,
-          language: savedState.language || 'en',
-        },
-      });
+      dispatch({ type: ACTIONS.LOAD_SAVED_STATE, payload: getPersistedState(savedState) });
     }
+
+    // Keep separate tabs on the same device in step. A shared server is still required
+    // to synchronise data between different users/devices.
+    const syncFromAnotherTab = (event) => {
+      if (event.key !== 'cafe-pos-state' || !event.newValue) return;
+      try {
+        dispatch({
+          type: ACTIONS.LOAD_SAVED_STATE,
+          payload: getPersistedState(JSON.parse(event.newValue)),
+        });
+      } catch {
+        // Ignore corrupt storage written by an older browser session.
+      }
+    };
+    window.addEventListener('storage', syncFromAnotherTab);
+    return () => window.removeEventListener('storage', syncFromAnotherTab);
+  }, []);
+
+  // Report the actual browser connection state. All POS actions still work offline
+  // because the application shell and operational data are stored on the device.
+  useEffect(() => {
+    const updateNetworkStatus = () => {
+      dispatch({ type: ACTIONS.SET_NETWORK_STATUS, payload: !navigator.onLine });
+    };
+    updateNetworkStatus();
+    window.addEventListener('online', updateNetworkStatus);
+    window.addEventListener('offline', updateNetworkStatus);
+    return () => {
+      window.removeEventListener('online', updateNetworkStatus);
+      window.removeEventListener('offline', updateNetworkStatus);
+    };
   }, []);
   
-  // Auto-save to localStorage
+  // Auto-save every shared operational value, including the menu items. Categories and
+  // items are persisted together so their IDs can never drift apart after a refresh.
   useEffect(() => {
     const saveState = () => {
       saveToStorage('cafe-pos-state', {
+        menuDataVersion: MENU_DATA_VERSION,
         tables: state.tables,
         orderHistory: state.orderHistory,
         heldOrders: state.heldOrders,
         categories: state.categories,
+        menuItems: state.menuItems,
+        selectedCategory: state.selectedCategory,
         users: state.users,
         language: state.language,
       });
     };
     
-    const timeoutId = setTimeout(saveState, 1000);
+    const timeoutId = setTimeout(saveState, 400);
     return () => clearTimeout(timeoutId);
-  }, [state.tables, state.orderHistory, state.heldOrders, state.categories, state.users, state.language]);
+  }, [
+    state.tables,
+    state.orderHistory,
+    state.heldOrders,
+    state.categories,
+    state.menuItems,
+    state.selectedCategory,
+    state.users,
+    state.language,
+  ]);
   
   // Toast auto-dismiss
   useEffect(() => {

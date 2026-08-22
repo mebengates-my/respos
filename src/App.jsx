@@ -31,7 +31,7 @@ function POSView() {
 }
 
 function MainContent() {
-  const { state, actions } = useApp();
+  const { state } = useApp();
   const { isLoggedIn, currentUser, view, language } = state;
   
   // Not logged in - show login screen
