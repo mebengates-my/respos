@@ -29,13 +29,18 @@ function POSView() {
   );
 }
 
+function getStoreSlugFromPath() {
+  const part = window.location.pathname.split('/').filter(Boolean)[0] || '';
+  return /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(part) ? part : null;
+}
+
 function MainContent() {
   const { state } = useApp();
   const { isLoggedIn, currentUser, view } = state;
   
   // Not logged in - show login screen
   if (!isLoggedIn) {
-    return <Login />;
+    return <Login storeSlug={getStoreSlugFromPath()} />;
   }
   
   const canManage = currentUser?.role === 'admin' || currentUser?.role === 'manager';

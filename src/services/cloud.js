@@ -3,6 +3,7 @@ import {
   mockGetSession,
   mockSignUp,
   mockSignIn,
+  mockSignInWithStorePin,
   mockSignOut,
   mockRegisterStore,
   mockListMyStores,
@@ -22,6 +23,13 @@ const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
 export const isCloudEnabled = Boolean(supabaseUrl && supabaseAnonKey);
+
+// URL-safe, human-readable tenant identifier used in /:storeSlug links.
+export function slugifyStoreName(value) {
+  return String(value || '').trim().toLowerCase().normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48);
+}
 
 export const supabase = isCloudEnabled
   ? createClient(supabaseUrl, supabaseAnonKey)
@@ -106,16 +114,17 @@ export const cloudAuth = {
 
   // Owner sign-up step 2: call the SQL `register_store()` RPC, then return the
   // new store. The mock does the equivalent in localStorage.
-  async registerStore({ storeName, displayName }) {
+  async registerStore({ storeName, storeSlug, displayName }) {
     if (!isCloudEnabled) {
-      return mockRegisterStore({ storeName, displayName });
+      return mockRegisterStore({ storeName, storeSlug, displayName });
     }
     const { data, error } = await supabase.rpc('register_store', {
       p_store_name: storeName,
+      p_store_slug: storeSlug || slugifyStoreName(storeName),
       p_display_name: displayName || '',
     });
     if (error) return { data: null, error };
-    return { data: { store: { id: data, name: storeName } }, error: null };
+    return { data: { store: { id: data, name: storeName, slug: storeSlug || slugifyStoreName(storeName) } }, error: null };
   },
 
   // Stores the signed-in user is an active member of, with membership role.
@@ -124,7 +133,7 @@ export const cloudAuth = {
     const { data, error } = await supabase
       .from('store_members')
       .select(
-        'store_id, role, display_name, pin, active, stores(id, name, currency, tax_rate)'
+        'store_id, role, display_name, pin, active, stores(id, name, slug, currency, tax_rate)'
       );
     if (error) return { data: [], error };
 
@@ -133,12 +142,27 @@ export const cloudAuth = {
       .map((m) => ({
         id: m.store_id,
         name: m.stores.name,
+        slug: m.stores.slug,
         currency: m.stores.currency,
         taxRate: m.stores.tax_rate,
         role: m.role,
         displayName: m.display_name || '',
       }));
     return { data: stores, error: null };
+  },
+
+  // Sign in at a store-specific URL with a staff PIN. The generated internal
+  // email and the service-role key stay on the server; the browser receives only
+  // a normal Supabase user session.
+  async signInWithStorePin({ storeSlug, pin }) {
+    if (!isCloudEnabled) return mockSignInWithStorePin({ storeSlug, pin });
+    const response = await callStorePinApi({ action: 'pin-login', storeSlug, pin });
+    if (response.error) return response;
+    const { session, user, membership } = response.data || {};
+    if (!session || !user || !membership) return { data: null, error: { message: 'Invalid PIN login response' } };
+    const { error } = await supabase.auth.setSession({ access_token: session.access_token, refresh_token: session.refresh_token });
+    if (error) return { data: null, error };
+    return { data: { user: toAppUser(user), membership }, error: null };
   },
 
   // Current Supabase session access token, or null when signed out / in mock mode.
@@ -227,6 +251,17 @@ async function callProvisionApi(body) {
       return { data: null, error: { message: json.error || 'Request failed' } };
     }
     return { data: json.member || { ok: true }, error: null };
+  } catch (err) {
+    return { data: null, error: { message: err?.message || 'Network error' } };
+  }
+}
+
+
+async function callStorePinApi(body) {
+  try {
+    const res = await fetch('/api/provision-staff', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const json = await res.json().catch(() => ({}));
+    return res.ok ? { data: json, error: null } : { data: null, error: { message: json.error || 'PIN sign-in failed' } };
   } catch (err) {
     return { data: null, error: { message: err?.message || 'Network error' } };
   }

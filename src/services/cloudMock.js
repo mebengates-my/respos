@@ -109,6 +109,18 @@ export async function mockSignIn({ email, password }) {
   return { data: { user: toAppUser(user) }, error: null };
 }
 
+export async function mockSignInWithStorePin({ storeSlug, pin }) {
+  await delay();
+  const db = loadDb();
+  const slug = String(storeSlug || '').trim().toLowerCase();
+  const store = db.stores.find((item) => item.slug === slug);
+  const membership = store && db.memberships.find((item) => item.storeId === store.id && item.active !== false && item.pin === String(pin));
+  const user = membership && findUser(db, membership.profileId);
+  if (!store || !membership || !user) return { data: null, error: { message: 'Invalid PIN' } };
+  saveToStorage(MOCK_SESSION_KEY, { userId: user.id, signedInAt: Date.now() });
+  return { data: { user: toAppUser(user), membership: { id: store.id, storeId: store.id, role: membership.role, displayName: membership.displayName || '', slug: store.slug } }, error: null };
+}
+
 export async function mockSignOut() {
   await delay(150);
   saveToStorage(MOCK_SESSION_KEY, null);
@@ -119,7 +131,11 @@ export async function mockSignOut() {
 
 // Create a store and make the signed-in user its admin (the in-browser
 // equivalent of the SQL `register_store()` function).
-export async function mockRegisterStore({ storeName, displayName }) {
+function slugify(value) {
+  return String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48);
+}
+
+export async function mockRegisterStore({ storeName, storeSlug, displayName }) {
   await delay();
   const db = loadDb();
   const userId = currentSessionId();
@@ -128,9 +144,14 @@ export async function mockRegisterStore({ storeName, displayName }) {
     return { data: null, error: { message: 'Not authenticated' } };
   }
 
+  const name = String(storeName || '').trim() || 'My Café';
+  const baseSlug = slugify(storeSlug || name);
+  if (!baseSlug) return { data: null, error: { message: 'Choose a URL using letters or numbers' } };
+  if (db.stores.some((item) => item.slug === baseSlug)) return { data: null, error: { message: 'That store URL is already taken' } };
   const store = {
     id: uid(),
-    name: String(storeName || '').trim() || 'My Café',
+    name,
+    slug: baseSlug,
     currency: DEFAULT_CURRENCY,
     taxRate: DEFAULT_TAX_RATE,
     settings: {},
@@ -148,7 +169,7 @@ export async function mockRegisterStore({ storeName, displayName }) {
     createdAt: Date.now(),
   });
   saveDb(db);
-  return { data: { store: { id: store.id, name: store.name } }, error: null };
+  return { data: { store: { id: store.id, name: store.name, slug: store.slug } }, error: null };
 }
 
 // List the stores the signed-in user is an active member of, including the
@@ -167,6 +188,7 @@ export async function mockListMyStores() {
         ? {
             id: store.id,
             name: store.name,
+            slug: store.slug || slugify(store.name),
             currency: store.currency,
             taxRate: store.taxRate,
             role: m.role,

@@ -137,3 +137,24 @@ only).
   functions.
 - PINs are short by nature; Supabase rate-limits sign-in attempts, which is
   the main protection for staff PIN accounts.
+
+## Store URLs and PIN entry
+
+Each store now has a unique URL slug. During store creation, choose a URL such
+as `mycafe`; staff open `https://your-domain/mycafe` and enter only their
+4-digit staff PIN. The generated staff email is resolved server-side and is
+never something a cashier needs to know. An owner can still use **Admin sign
+in with email** from that page for account recovery and management.
+
+Before deploying this version, run the updated `supabase/schema.sql`. It adds
+`stores.slug`, makes it unique, and changes `register_store` to accept the
+store URL. For an existing project, check the generated slugs after running
+the migration: two existing stores whose names normalize to the same URL need
+one slug renamed before the unique index can be created.
+
+The PIN endpoint is `POST /api/provision-staff` with
+`{ "action": "pin-login", "storeSlug": "mycafe", "pin": "1234" }`.
+It deliberately does not expose the service role key or internal staff email.
+Use Supabase Auth rate limiting and, for a public production deployment, add
+an edge/WAF rate limit to this endpoint because a four-digit PIN has limited
+entropy.

@@ -16,7 +16,7 @@ import {
 } from 'lucide-react';
 import { motion } from 'framer-motion';
 
-export default function Login() {
+export default function Login({ storeSlug = null }) {
   const { state, actions } = useApp();
   const { users, language } = state;
   const [loginMode, setLoginMode] = useState('staff'); // 'staff' | 'cloud'
@@ -28,7 +28,7 @@ export default function Login() {
   // Cloud/owner login (Supabase or the in-browser mock) is a separate full
   // screen so it does not disturb the existing staff PIN flow.
   if (loginMode === 'cloud') {
-    return <Onboarding onBack={() => setLoginMode('staff')} />;
+    return <Onboarding storeSlug={storeSlug} onBack={() => setLoginMode('staff')} />;
   }
   
   const handleLanguageChange = (lang) => {
@@ -61,7 +61,7 @@ export default function Login() {
   // In a live (cloud) deployment the demo staff picker makes no sense: the seed
   // PIN users only exist in local mode, they cannot sign in to Supabase. New
   // customers and their staff all enter through the store login screen instead.
-  const showCloudLanding = isCloudEnabled && loginMode === 'staff';
+  const showCloudLanding = (isCloudEnabled || Boolean(storeSlug)) && loginMode === 'staff';
   const currentYear = new Date().getFullYear();
   
   // One section per role, in order of responsibility.

@@ -26,9 +26,10 @@ const PHASES = {
   SIGNUP: 'signup',
   CREATE_FIRST_STORE: 'create_first_store',
   SELECT_STORE: 'select_store',
+  STORE_PIN: 'store_pin',
 };
 
-export default function Onboarding({ onBack }) {
+export default function Onboarding({ onBack, storeSlug = null }) {
   const { state, actions } = useApp();
   const { language } = state;
 
@@ -45,6 +46,8 @@ export default function Onboarding({ onBack }) {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [displayName, setDisplayName] = useState('');
   const [storeName, setStoreName] = useState('');
+  const [storeSlugInput, setStoreSlugInput] = useState('');
+  const [pin, setPin] = useState('');
 
   const changeLanguage = (lang) => {
     actions.setLanguage(lang);
@@ -92,7 +95,7 @@ export default function Onboarding({ onBack }) {
       if (data?.user) {
         await loadStoresFor(data.user);
       } else {
-        setPhase(PHASES.SIGNIN);
+        setPhase(storeSlug ? PHASES.STORE_PIN : PHASES.SIGNIN);
       }
     })();
     return () => {
@@ -117,6 +120,15 @@ export default function Onboarding({ onBack }) {
     } finally {
       setBusy(false);
     }
+  };
+
+  const handleStorePin = async (e) => {
+    e.preventDefault(); setError(''); setBusy(true);
+    try {
+      const { data, error: pinError } = await cloudAuth.signInWithStorePin({ storeSlug, pin });
+      if (pinError) { setError(pinError.message || 'Invalid PIN'); return; }
+      enterStore(data.user, data.membership);
+    } catch { setError(t('error', language)); } finally { setBusy(false); }
   };
 
   const handleSignUp = async (e) => {
@@ -145,6 +157,7 @@ export default function Onboarding({ onBack }) {
       // Owner sign-up creates their first store (register_store equivalent).
       const { data: storeData, error: storeError } = await cloudAuth.registerStore({
         storeName,
+        storeSlug: storeSlugInput,
         displayName,
       });
       if (storeError) {
@@ -171,6 +184,7 @@ export default function Onboarding({ onBack }) {
     try {
       const { data: storeData, error: storeError } = await cloudAuth.registerStore({
         storeName,
+        storeSlug: storeSlugInput,
         displayName: cloudUser?.displayName || '',
       });
       if (storeError) {
@@ -283,6 +297,17 @@ export default function Onboarding({ onBack }) {
             </div>
           )}
 
+          {/* Store-specific staff PIN sign-in */}
+          {phase === PHASES.STORE_PIN && (
+            <form onSubmit={handleStorePin} className="p-8 space-y-5">
+              <div className="text-center"><div className="inline-flex items-center justify-center w-14 h-14 bg-accent/10 text-accent rounded-2xl mb-3"><Store className="w-7 h-7" /></div><h2 className="text-2xl font-display font-bold text-dark-roast">{storeSlug}</h2><p className="text-sm text-medium-roast mt-1">Enter your staff PIN to open this POS</p></div>
+              <Field icon={<Lock className="w-5 h-5" />} label="4-digit PIN" type="password" value={pin} onChange={(value) => setPin(value.replace(/\D/g, '').slice(0, 4))} placeholder="••••" autoComplete="one-time-code" />
+              {error && <ErrorNote message={error} />}
+              <button type="submit" disabled={busy || pin.length !== 4} className="w-full flex items-center justify-center gap-2 py-3.5 bg-accent text-white rounded-xl font-semibold hover:bg-accent/90 disabled:opacity-60 transition-colors btn-press">{busy ? <Loader2 className="w-5 h-5 animate-spin" /> : <>Open POS <ArrowRight className="w-5 h-5" /></>}</button>
+              <button type="button" onClick={() => { setError(''); setPhase(PHASES.SIGNIN); }} className="w-full text-sm text-medium-roast hover:text-accent">Admin sign in with email</button>
+            </form>
+          )}
+
           {/* Sign in */}
           {phase === PHASES.SIGNIN && (
             <form onSubmit={handleSignIn} className="p-8 space-y-5">
@@ -380,6 +405,8 @@ export default function Onboarding({ onBack }) {
                 placeholder="My Café"
                 autoComplete="organization"
               />
+              <Field icon={<Store className="w-5 h-5" />} label="Store URL" type="text" value={storeSlugInput} onChange={(value) => setStoreSlugInput(value.toLowerCase().replace(/[^a-z0-9-]/g, ''))} placeholder="mycafe" />
+              <p className="text-xs text-medium-roast -mt-2">Your team will use /{storeSlugInput || 'mycafe'} to enter their PIN.</p>
               <Field
                 icon={<Mail className="w-5 h-5" />}
                 label={t('email', language)}
@@ -465,6 +492,8 @@ export default function Onboarding({ onBack }) {
                 onChange={setStoreName}
                 placeholder="My Café"
               />
+              <Field icon={<Store className="w-5 h-5" />} label="Store URL" type="text" value={storeSlugInput} onChange={(value) => setStoreSlugInput(value.toLowerCase().replace(/[^a-z0-9-]/g, ''))} placeholder="mycafe" />
+              <p className="text-xs text-medium-roast -mt-2">Your team will use /{storeSlugInput || 'mycafe'} to enter their PIN.</p>
 
               {error && <ErrorNote message={error} />}
 

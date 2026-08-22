@@ -10,12 +10,21 @@
 create table if not exists public.stores (
   id uuid primary key default gen_random_uuid(),
   name text not null,
+  slug text not null unique check (slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$'),
   currency text not null default 'RM',
   tax_rate numeric not null default 0.06,
   settings jsonb not null default '{}'::jsonb,
   created_by uuid references auth.users(id),
   created_at timestamptz not null default now()
 );
+
+-- Existing projects: run this schema again to add URL slugs safely.
+alter table public.stores add column if not exists slug text;
+update public.stores
+set slug = trim(both '-' from regexp_replace(lower(name), '[^a-z0-9]+', '-', 'g'))
+where slug is null;
+alter table public.stores alter column slug set not null;
+create unique index if not exists stores_slug_unique on public.stores (slug);
 
 -- ---------- Profiles (one per authenticated user) ----------
 create table if not exists public.profiles (
@@ -116,6 +125,9 @@ create table if not exists public.expenses (
 );
 
 -- ---------- Indexes ----------
+create unique index if not exists idx_store_members_unique_pin
+  on public.store_members (store_id, pin) where pin is not null;
+create index if not exists idx_stores_slug on public.stores (slug);
 create index if not exists idx_members_profile on public.store_members (profile_id);
 create index if not exists idx_menu_cat_store on public.menu_categories (store_id);
 create index if not exists idx_menu_items_store on public.menu_items (store_id);
@@ -158,7 +170,7 @@ $$;
 -- Sign-up flow: creates profile + store + admin membership.
 -- Called by the app right after Supabase Auth sign-up.
 -- ============================================================
-create or replace function public.register_store(p_store_name text, p_display_name text)
+create or replace function public.register_store(p_store_name text, p_store_slug text, p_display_name text)
 returns uuid
 language plpgsql security definer set search_path = public as $$
 declare
@@ -173,8 +185,12 @@ begin
           (select email from auth.users where id = auth.uid()))
   on conflict (id) do update set display_name = excluded.display_name;
 
-  insert into public.stores (name, created_by)
-  values (p_store_name, auth.uid())
+  if p_store_slug is null or p_store_slug !~ '^[a-z0-9]+(-[a-z0-9]+)*$' then
+    raise exception 'invalid store URL';
+  end if;
+
+  insert into public.stores (name, slug, created_by)
+  values (p_store_name, p_store_slug, auth.uid())
   returning id into new_store_id;
 
   insert into public.store_members (store_id, profile_id, role, display_name)
@@ -184,7 +200,7 @@ begin
 end;
 $$;
 
-grant execute on function public.register_store(text, text) to authenticated;
+grant execute on function public.register_store(text, text, text) to authenticated;
 
 -- ============================================================
 -- Row Level Security

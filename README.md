@@ -49,11 +49,12 @@ is scaffolded and the first online features are built:
   `VITE_SUPABASE_ANON_KEY` are set it talks to your real Supabase project;
   without them it transparently falls back to an **in-browser mock**
   (`src/services/cloudMock.js`) so the flow is fully demoable offline.
-- **Owner onboarding** — the Login screen now has a **Store login** button
-  that opens owner sign-up/sign-in, store creation, and store selection. A
-  cloud session persists across refresh (key `cafe-pos-session-cloud`) and
-  re-validates against the backend on load. Signing in as an owner puts you
-  in the Admin/Manager panel; a server membership lands in the POS.
+- **Store URLs + PIN entry** — a store chooses a unique slug at creation
+  (for example `mycafe`). Staff open `https://your-domain/mycafe` and enter
+  their 4-digit PIN; no one needs to type or know the owner email. Owners can
+  still use email/password from the store page for administration/recovery.
+  A cloud session persists across refresh (key `cafe-pos-session-cloud`) and
+  re-validates against the backend on load.
 - **Staff provisioning route** (`api/provision-staff.js`) — a Vercel
   serverless function that uses the **service-role key** (server-only env)
   to create a Supabase Auth user (generated email + 4-digit PIN as password)

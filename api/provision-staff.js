@@ -57,7 +57,28 @@ export default async function handler(req, res) {
     return;
   }
 
-  const { action = 'provision', storeId, profileId: targetProfileId, name, role, pin } = body || {};
+  const { action = 'provision', storeId, storeSlug, profileId: targetProfileId, name, role, pin } = body || {};
+
+  // Store tablets use /:storeSlug and a PIN. Resolve the internal staff email
+  // server-side, then return a standard Supabase session to the browser.
+  if (action === 'pin-login') {
+    if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(String(storeSlug || '')) || !/^\d{4}$/.test(String(pin || ''))) {
+      res.status(400).json({ error: 'A valid store URL and 4-digit PIN are required' });
+      return;
+    }
+    const { data: store } = await createClient(SUPABASE_URL, SERVICE_ROLE_KEY, { auth: { autoRefreshToken: false, persistSession: false } })
+      .from('stores').select('id, slug').eq('slug', String(storeSlug).toLowerCase()).maybeSingle();
+    if (!store) { res.status(401).json({ error: 'Invalid PIN' }); return; }
+    const adminForPin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, { auth: { autoRefreshToken: false, persistSession: false } });
+    const { data: member } = await adminForPin.from('store_members')
+      .select('profile_id, role, display_name, profiles(email)')
+      .eq('store_id', store.id).eq('pin', String(pin)).eq('active', true).maybeSingle();
+    if (!member?.profiles?.email) { res.status(401).json({ error: 'Invalid PIN' }); return; }
+    const { data: signedIn, error: signInError } = await adminForPin.auth.signInWithPassword({ email: member.profiles.email, password: String(pin) });
+    if (signInError || !signedIn?.session || !signedIn?.user) { res.status(401).json({ error: 'Invalid PIN' }); return; }
+    res.status(200).json({ session: signedIn.session, user: signedIn.user, membership: { id: store.id, storeId: store.id, role: member.role, displayName: member.display_name || '', slug: store.slug } });
+    return;
+  }
 
   if (!storeId) {
     res.status(400).json({ error: 'storeId is required' });
