@@ -1,0 +1,296 @@
+-- ============================================================
+-- Café POS — Supabase SaaS schema (multi-tenant)
+--
+-- Run once in: Supabase Dashboard → SQL Editor → New query → Run
+-- Every row below is scoped to a store (tenant). Row Level
+-- Security guarantees one store can never read/write another.
+-- ============================================================
+
+-- ---------- Stores (tenants) ----------
+create table if not exists public.stores (
+  id uuid primary key default gen_random_uuid(),
+  name text not null,
+  currency text not null default 'RM',
+  tax_rate numeric not null default 0.06,
+  settings jsonb not null default '{}'::jsonb,
+  created_by uuid references auth.users(id),
+  created_at timestamptz not null default now()
+);
+
+-- ---------- Profiles (one per authenticated user) ----------
+create table if not exists public.profiles (
+  id uuid primary key references auth.users(id) on delete cascade,
+  display_name text not null default '',
+  email text,
+  created_at timestamptz not null default now()
+);
+
+-- ---------- Memberships: who belongs to which store, with what role ----------
+-- Staff (manager/server) get real auth users with a generated email and the
+-- 4-digit PIN as password, so RLS works for everyone. Provisioning is done by
+-- the store admin through a server-side API (Vercel) holding the service key.
+create table if not exists public.store_members (
+  store_id uuid not null references public.stores(id) on delete cascade,
+  profile_id uuid not null references public.profiles(id) on delete cascade,
+  role text not null check (role in ('admin','manager','server')),
+  display_name text not null default '',
+  pin text,
+  active boolean not null default true,
+  created_at timestamptz not null default now(),
+  primary key (store_id, profile_id)
+);
+
+-- ---------- Menu ----------
+create table if not exists public.menu_categories (
+  id uuid primary key default gen_random_uuid(),
+  store_id uuid not null references public.stores(id) on delete cascade,
+  name text not null,
+  icon text not null default 'Coffee',
+  sort int not null default 0
+);
+
+create table if not exists public.menu_items (
+  id uuid primary key default gen_random_uuid(),
+  store_id uuid not null references public.stores(id) on delete cascade,
+  category_id uuid not null references public.menu_categories(id) on delete cascade,
+  name text not null,
+  description text not null default '',
+  price_cents int not null check (price_cents >= 0),
+  modifiers jsonb not null default '[]'::jsonb,
+  available boolean not null default true,
+  sort int not null default 0
+);
+
+-- ---------- Tables ----------
+create table if not exists public.dining_tables (
+  id uuid primary key default gen_random_uuid(),
+  store_id uuid not null references public.stores(id) on delete cascade,
+  number int not null,
+  capacity int not null default 4,
+  is_counter boolean not null default false,
+  status text not null default 'available'
+    check (status in ('available','occupied','reserved','cleaning')),
+  current_order_id uuid
+);
+
+-- ---------- Orders (open, held, paid, voided) ----------
+-- Items are stored as JSONB (same shape as the local app) for easy migration.
+create table if not exists public.orders (
+  id uuid primary key default gen_random_uuid(),
+  store_id uuid not null references public.stores(id) on delete cascade,
+  status text not null default 'open' check (status in ('open','held','paid','voided')),
+  table_ref text,                      -- 'COUNTER' or dining_tables.id
+  items jsonb not null default '[]'::jsonb,
+  subtotal_cents int not null default 0,
+  tax_cents int not null default 0,
+  discount jsonb,
+  discount_cents int not null default 0,
+  total_cents int not null default 0,
+  notes text,
+  payment_method text check (payment_method in ('cash','card','ewallet')),
+  amount_paid_cents int,
+  change_cents int,
+  created_by uuid references auth.users(id),
+  created_at timestamptz not null default now(),
+  held_at timestamptz,
+  paid_at timestamptz,
+  voided_at timestamptz
+);
+
+-- ---------- Expenses ----------
+create table if not exists public.expense_categories (
+  id uuid primary key default gen_random_uuid(),
+  store_id uuid not null references public.stores(id) on delete cascade,
+  name text not null
+);
+
+create table if not exists public.expenses (
+  id uuid primary key default gen_random_uuid(),
+  store_id uuid not null references public.stores(id) on delete cascade,
+  category_id uuid not null references public.expense_categories(id) on delete cascade,
+  description text not null default '',
+  amount_cents int not null check (amount_cents > 0),
+  occurred_at timestamptz not null default now(),
+  created_by uuid references auth.users(id),
+  created_at timestamptz not null default now()
+);
+
+-- ---------- Indexes ----------
+create index if not exists idx_members_profile on public.store_members (profile_id);
+create index if not exists idx_menu_cat_store on public.menu_categories (store_id);
+create index if not exists idx_menu_items_store on public.menu_items (store_id);
+create index if not exists idx_menu_items_cat on public.menu_items (category_id);
+create index if not exists idx_tables_store on public.dining_tables (store_id);
+create index if not exists idx_orders_store_status on public.orders (store_id, status);
+create index if not exists idx_orders_paid_at on public.orders (store_id, paid_at);
+create index if not exists idx_exp_cat_store on public.expense_categories (store_id);
+create index if not exists idx_expenses_store_date on public.expenses (store_id, occurred_at);
+
+-- ============================================================
+-- Helpers: which stores does the signed-in user belong to?
+-- ============================================================
+create or replace function public.my_store_ids()
+returns setof uuid
+language sql security definer stable set search_path = public as $$
+  select store_id from public.store_members
+  where profile_id = auth.uid() and active = true
+$$;
+
+create or replace function public.my_managing_store_ids()
+returns setof uuid
+language sql security definer stable set search_path = public as $$
+  select store_id from public.store_members
+  where profile_id = auth.uid() and active = true
+    and role in ('admin','manager')
+$$;
+
+create or replace function public.is_store_admin(sid uuid)
+returns boolean
+language sql security definer stable set search_path = public as $$
+  select exists (
+    select 1 from public.store_members
+    where store_id = sid and profile_id = auth.uid()
+      and role = 'admin' and active = true
+  )
+$$;
+
+-- ============================================================
+-- Sign-up flow: creates profile + store + admin membership.
+-- Called by the app right after Supabase Auth sign-up.
+-- ============================================================
+create or replace function public.register_store(p_store_name text, p_display_name text)
+returns uuid
+language plpgsql security definer set search_path = public as $$
+declare
+  new_store_id uuid;
+begin
+  if auth.uid() is null then
+    raise exception 'not authenticated';
+  end if;
+
+  insert into public.profiles (id, display_name, email)
+  values (auth.uid(), coalesce(p_display_name, ''),
+          (select email from auth.users where id = auth.uid()))
+  on conflict (id) do update set display_name = excluded.display_name;
+
+  insert into public.stores (name, created_by)
+  values (p_store_name, auth.uid())
+  returning id into new_store_id;
+
+  insert into public.store_members (store_id, profile_id, role, display_name)
+  values (new_store_id, auth.uid(), 'admin', coalesce(p_display_name, ''));
+
+  return new_store_id;
+end;
+$$;
+
+grant execute on function public.register_store(text, text) to authenticated;
+
+-- ============================================================
+-- Row Level Security
+-- ============================================================
+alter table public.stores enable row level security;
+alter table public.profiles enable row level security;
+alter table public.store_members enable row level security;
+alter table public.menu_categories enable row level security;
+alter table public.menu_items enable row level security;
+alter table public.dining_tables enable row level security;
+alter table public.orders enable row level security;
+alter table public.expense_categories enable row level security;
+alter table public.expenses enable row level security;
+
+-- Stores: members read; admins update/delete
+create policy "stores_select" on public.stores for select
+  using (id in (select public.my_store_ids()));
+create policy "stores_update" on public.stores for update
+  using (public.is_store_admin(id));
+create policy "stores_delete" on public.stores for delete
+  using (public.is_store_admin(id));
+
+-- Profiles: any signed-in user can read basic names; update own
+create policy "profiles_select" on public.profiles for select
+  to authenticated using (true);
+create policy "profiles_update_own" on public.profiles for update
+  using (id = auth.uid());
+
+-- Memberships: members read; admins manage
+create policy "members_select" on public.store_members for select
+  using (store_id in (select public.my_store_ids()));
+create policy "members_insert" on public.store_members for insert
+  with check (public.is_store_admin(store_id));
+create policy "members_update" on public.store_members for update
+  using (public.is_store_admin(store_id));
+create policy "members_delete" on public.store_members for delete
+  using (public.is_store_admin(store_id));
+
+-- Menu: members read; managers+ write
+create policy "menu_cat_select" on public.menu_categories for select
+  using (store_id in (select public.my_store_ids()));
+create policy "menu_cat_write" on public.menu_categories for all
+  using (store_id in (select public.my_managing_store_ids()))
+  with check (store_id in (select public.my_managing_store_ids()));
+
+create policy "menu_items_select" on public.menu_items for select
+  using (store_id in (select public.my_store_ids()));
+create policy "menu_items_write" on public.menu_items for all
+  using (store_id in (select public.my_managing_store_ids()))
+  with check (store_id in (select public.my_managing_store_ids()));
+
+-- Tables: members read & update status; managers+ add/remove
+create policy "tables_select" on public.dining_tables for select
+  using (store_id in (select public.my_store_ids()));
+create policy "tables_update" on public.dining_tables for update
+  using (store_id in (select public.my_store_ids()));
+create policy "tables_insert" on public.dining_tables for insert
+  with check (store_id in (select public.my_managing_store_ids()));
+create policy "tables_delete" on public.dining_tables for delete
+  using (store_id in (select public.my_managing_store_ids()));
+
+-- Orders: every member can read & create (servers take orders);
+-- managers+ update (payments, holds) and delete
+create policy "orders_select" on public.orders for select
+  using (store_id in (select public.my_store_ids()));
+create policy "orders_insert" on public.orders for insert
+  with check (store_id in (select public.my_store_ids()));
+create policy "orders_update" on public.orders for update
+  using (store_id in (select public.my_managing_store_ids()));
+create policy "orders_delete" on public.orders for delete
+  using (store_id in (select public.my_managing_store_ids()));
+
+-- Expenses: members read; managers+ write
+create policy "exp_cat_select" on public.expense_categories for select
+  using (store_id in (select public.my_store_ids()));
+create policy "exp_cat_write" on public.expense_categories for all
+  using (store_id in (select public.my_managing_store_ids()))
+  with check (store_id in (select public.my_managing_store_ids()));
+
+create policy "expenses_select" on public.expenses for select
+  using (store_id in (select public.my_store_ids()));
+create policy "expenses_write" on public.expenses for all
+  using (store_id in (select public.my_managing_store_ids()))
+  with check (store_id in (select public.my_managing_store_ids()));
+
+-- ============================================================
+-- Realtime: live open orders, table status, expenses across devices
+-- ============================================================
+do $$
+begin
+  if not exists (select 1 from pg_publication where pubname = 'supabase_realtime') then
+    return;
+  end if;
+  begin
+    alter publication supabase_realtime add table public.orders;
+  exception when duplicate_object then null; end;
+  begin
+    alter publication supabase_realtime add table public.dining_tables;
+  exception when duplicate_object then null; end;
+  begin
+    alter publication supabase_realtime add table public.expenses;
+  exception when duplicate_object then null; end;
+end $$;
+
+-- ============================================================
+-- Demo data is intentionally NOT included: each SaaS customer
+-- creates their own store via register_store() and builds their
+-- own menu, tables and staff.
+-- ============================================================

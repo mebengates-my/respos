@@ -53,6 +53,14 @@ const ACTIONS = {
   UPDATE_USER: 'UPDATE_USER',
   DELETE_USER: 'DELETE_USER',
   
+  // Expenses (Admin & Manager)
+  ADD_EXPENSE_CATEGORY: 'ADD_EXPENSE_CATEGORY',
+  UPDATE_EXPENSE_CATEGORY: 'UPDATE_EXPENSE_CATEGORY',
+  DELETE_EXPENSE_CATEGORY: 'DELETE_EXPENSE_CATEGORY',
+  ADD_EXPENSE: 'ADD_EXPENSE',
+  UPDATE_EXPENSE: 'UPDATE_EXPENSE',
+  DELETE_EXPENSE: 'DELETE_EXPENSE',
+  
   // Orders
   ADD_ITEM: 'ADD_ITEM',
   UPDATE_ITEM: 'UPDATE_ITEM',
@@ -77,14 +85,31 @@ const ACTIONS = {
   
   // Data
   LOAD_SAVED_STATE: 'LOAD_SAVED_STATE',
+  IMPORT_BACKUP: 'IMPORT_BACKUP',
 };
+
+// localStorage key holding the signed-in user. Only the user id is stored; the full
+// user record is always re-resolved against the persisted users list.
+export const SESSION_STORAGE_KEY = 'cafe-pos-session';
 
 // Initial users (staff)
 const defaultUsers = [
   { id: 'admin-1', name: 'Admin User', role: 'admin', pin: '1234', active: true },
+  { id: 'manager-1', name: 'Nadia Rahman', role: 'manager', pin: '5555', active: true },
   { id: 'server-1', name: 'Maria Santos', role: 'server', pin: '1111', active: true },
   { id: 'server-2', name: 'Ahmad Khan', role: 'server', pin: '2222', active: true },
   { id: 'server-3', name: 'Sarah Lee', role: 'server', pin: '3333', active: true },
+];
+
+// Initial expense categories (business costs, separate from menu categories)
+const defaultExpenseCategories = [
+  { id: 'exp-cat-rent', name: 'Rent' },
+  { id: 'exp-cat-salaries', name: 'Salaries' },
+  { id: 'exp-cat-ingredients', name: 'Ingredients & Supplies' },
+  { id: 'exp-cat-utilities', name: 'Utilities' },
+  { id: 'exp-cat-marketing', name: 'Marketing' },
+  { id: 'exp-cat-maintenance', name: 'Maintenance' },
+  { id: 'exp-cat-other', name: 'Other' },
 ];
 
 // Initial state
@@ -111,6 +136,10 @@ const initialState = {
   
   // Users
   users: defaultUsers,
+  
+  // Expenses
+  expenseCategories: defaultExpenseCategories,
+  expenses: [],
   
   // Orders
   currentOrder: null,
@@ -155,6 +184,10 @@ function getPersistedState(savedState) {
     selectedCategory,
     users: savedState?.users || defaultUsers,
     language: savedState?.language || 'en',
+    expenseCategories: Array.isArray(savedState?.expenseCategories) && savedState.expenseCategories.length > 0
+      ? savedState.expenseCategories
+      : defaultExpenseCategories,
+    expenses: savedState?.expenses || [],
   };
 }
 
@@ -167,8 +200,9 @@ function appReducer(state, action) {
         ...state,
         currentUser: action.payload,
         isLoggedIn: true,
-        // Admins land directly in the Admin Panel; its default tab is Dashboard.
-        view: action.payload.role === 'admin' ? 'admin' : 'pos',
+        // Admins and managers land directly in the management panel; its default tab
+        // is Dashboard. Servers go straight to the POS.
+        view: action.payload.role === 'admin' || action.payload.role === 'manager' ? 'admin' : 'pos',
       };
     
     case ACTIONS.LOGOUT:
@@ -354,6 +388,61 @@ function appReducer(state, action) {
         users: state.users.filter(user => user.id !== action.payload),
       };
     
+    // Expenses
+    case ACTIONS.ADD_EXPENSE_CATEGORY: {
+      const newExpenseCategory = {
+        id: `exp-cat-${Date.now()}`,
+        ...action.payload,
+      };
+      return { ...state, expenseCategories: [...state.expenseCategories, newExpenseCategory] };
+    }
+    
+    case ACTIONS.UPDATE_EXPENSE_CATEGORY: {
+      const { id, updates } = action.payload;
+      return {
+        ...state,
+        expenseCategories: state.expenseCategories.map(cat =>
+          cat.id === id ? { ...cat, ...updates } : cat
+        ),
+      };
+    }
+    
+    case ACTIONS.DELETE_EXPENSE_CATEGORY: {
+      // Deleting a category also removes every expense recorded inside it
+      // (the UI confirms this before dispatching).
+      return {
+        ...state,
+        expenseCategories: state.expenseCategories.filter(cat => cat.id !== action.payload),
+        expenses: state.expenses.filter(expense => expense.categoryId !== action.payload),
+      };
+    }
+    
+    case ACTIONS.ADD_EXPENSE: {
+      const newExpense = {
+        id: `exp-${Date.now()}`,
+        ...action.payload,
+        createdBy: action.payload.createdBy || state.currentUser?.name,
+        createdAt: Date.now(),
+      };
+      return { ...state, expenses: [newExpense, ...state.expenses] };
+    }
+    
+    case ACTIONS.UPDATE_EXPENSE: {
+      const { id, updates } = action.payload;
+      return {
+        ...state,
+        expenses: state.expenses.map(expense =>
+          expense.id === id ? { ...expense, ...updates } : expense
+        ),
+      };
+    }
+    
+    case ACTIONS.DELETE_EXPENSE:
+      return {
+        ...state,
+        expenses: state.expenses.filter(expense => expense.id !== action.payload),
+      };
+    
     // Orders
     case ACTIONS.ADD_ITEM: {
       const { menuItem, selectedModifiers, quantity = 1, specialInstructions = '' } = action.payload;
@@ -396,6 +485,7 @@ function appReducer(state, action) {
             id: generateOrderId(), 
             items: [], 
             status: 'open',
+            createdAt: Date.now(),
             tableId: state.selectedTable?.id || 'COUNTER',
             serverId: state.currentUser?.id,
           }),
@@ -614,9 +704,22 @@ function appReducer(state, action) {
     case ACTIONS.SET_NETWORK_STATUS:
       return { ...state, isOffline: action.payload };
     
-    // Data persistence
-    case ACTIONS.LOAD_SAVED_STATE:
-      return { ...state, ...action.payload };
+    // Data persistence (IMPORT_BACKUP is a full replace using the same shape)
+    case ACTIONS.IMPORT_BACKUP:
+    case ACTIONS.LOAD_SAVED_STATE: {
+      const next = { ...state, ...action.payload };
+      // Keep the signed-in user in step with the (possibly newer) users list coming
+      // from storage: pick up renames/role changes, and sign out if the user was
+      // deleted or deactivated on another tab.
+      if (next.currentUser && Array.isArray(next.users)) {
+        const fresh = next.users.find(u => u.id === next.currentUser.id);
+        if (!fresh || fresh.active === false) {
+          return { ...next, currentUser: null, isLoggedIn: false, view: 'pos', currentOrder: null };
+        }
+        next.currentUser = fresh;
+      }
+      return next;
+    }
     
     default:
       return state;
@@ -627,25 +730,64 @@ function appReducer(state, action) {
 export function AppProvider({ children }) {
   const [state, dispatch] = useReducer(appReducer, initialState);
   
-  // Restore the on-device data. Authentication is deliberately never restored, so a
-  // browser refresh always returns the active user to the PIN screen.
+  // Restore the on-device data, then restore the signed-in user. The session survives
+  // a browser refresh: only the user id is stored, and it is re-checked against the
+  // persisted users list (so a deleted/deactivated user cannot be restored).
   useEffect(() => {
     const savedState = loadFromStorage('cafe-pos-state', null);
+    let restoredUsers = defaultUsers;
     if (savedState) {
-      dispatch({ type: ACTIONS.LOAD_SAVED_STATE, payload: getPersistedState(savedState) });
+      const persisted = getPersistedState(savedState);
+      restoredUsers = Array.isArray(persisted.users) && persisted.users.length > 0
+        ? persisted.users
+        : defaultUsers;
+      dispatch({ type: ACTIONS.LOAD_SAVED_STATE, payload: persisted });
+    }
+
+    const session = loadFromStorage(SESSION_STORAGE_KEY, null);
+    if (session?.userId) {
+      const user = restoredUsers.find(u => u.id === session.userId && u.active !== false);
+      if (user) {
+        dispatch({ type: ACTIONS.LOGIN, payload: user });
+      } else {
+        saveToStorage(SESSION_STORAGE_KEY, null);
+      }
     }
 
     // Keep separate tabs on the same device in step. A shared server is still required
     // to synchronise data between different users/devices.
     const syncFromAnotherTab = (event) => {
-      if (event.key !== 'cafe-pos-state' || !event.newValue) return;
-      try {
-        dispatch({
-          type: ACTIONS.LOAD_SAVED_STATE,
-          payload: getPersistedState(JSON.parse(event.newValue)),
-        });
-      } catch {
-        // Ignore corrupt storage written by an older browser session.
+      if (event.key === 'cafe-pos-state' && event.newValue) {
+        try {
+          dispatch({
+            type: ACTIONS.LOAD_SAVED_STATE,
+            payload: getPersistedState(JSON.parse(event.newValue)),
+          });
+        } catch {
+          // Ignore corrupt storage written by an older browser session.
+        }
+        return;
+      }
+
+      // Mirror login/logout across tabs on this device.
+      if (event.key === SESSION_STORAGE_KEY) {
+        try {
+          const sessionData = event.newValue ? JSON.parse(event.newValue) : null;
+          if (!sessionData?.userId) {
+            dispatch({ type: ACTIONS.LOGOUT });
+            return;
+          }
+          const latestState = loadFromStorage('cafe-pos-state', null);
+          const usersList = Array.isArray(latestState?.users) && latestState.users.length > 0
+            ? latestState.users
+            : defaultUsers;
+          const user = usersList.find(u => u.id === sessionData.userId && u.active !== false);
+          if (user) {
+            dispatch({ type: ACTIONS.LOGIN, payload: user });
+          }
+        } catch {
+          // Ignore corrupt session writes.
+        }
       }
     };
     window.addEventListener('storage', syncFromAnotherTab);
@@ -681,6 +823,8 @@ export function AppProvider({ children }) {
         selectedCategory: state.selectedCategory,
         users: state.users,
         language: state.language,
+        expenseCategories: state.expenseCategories,
+        expenses: state.expenses,
       });
     };
     
@@ -695,6 +839,8 @@ export function AppProvider({ children }) {
     state.selectedCategory,
     state.users,
     state.language,
+    state.expenseCategories,
+    state.expenses,
   ]);
   
   // Toast auto-dismiss
@@ -711,10 +857,13 @@ export function AppProvider({ children }) {
   const actions = {
     // Auth
     login: useCallback((user) => {
+      // Persist the session so a browser refresh keeps the user signed in.
+      saveToStorage(SESSION_STORAGE_KEY, { userId: user.id, signedInAt: Date.now() });
       dispatch({ type: ACTIONS.LOGIN, payload: user });
     }, []),
     
     logout: useCallback(() => {
+      saveToStorage(SESSION_STORAGE_KEY, null);
       dispatch({ type: ACTIONS.LOGOUT });
     }, []),
     
@@ -791,12 +940,43 @@ export function AppProvider({ children }) {
       dispatch({ type: ACTIONS.ADD_USER, payload: data });
     }, []),
     
+    // Backup: replace all shared state with a validated backup file. The normal
+    // auto-save effect then persists the imported data to localStorage.
+    importBackup: useCallback((savedState) => {
+      dispatch({ type: ACTIONS.IMPORT_BACKUP, payload: getPersistedState(savedState || {}) });
+    }, []),
+    
     updateUser: useCallback((id, updates) => {
       dispatch({ type: ACTIONS.UPDATE_USER, payload: { id, updates } });
     }, []),
     
     deleteUser: useCallback((id) => {
       dispatch({ type: ACTIONS.DELETE_USER, payload: id });
+    }, []),
+    
+    // Expenses
+    addExpenseCategory: useCallback((data) => {
+      dispatch({ type: ACTIONS.ADD_EXPENSE_CATEGORY, payload: data });
+    }, []),
+    
+    updateExpenseCategory: useCallback((id, updates) => {
+      dispatch({ type: ACTIONS.UPDATE_EXPENSE_CATEGORY, payload: { id, updates } });
+    }, []),
+    
+    deleteExpenseCategory: useCallback((id) => {
+      dispatch({ type: ACTIONS.DELETE_EXPENSE_CATEGORY, payload: id });
+    }, []),
+    
+    addExpense: useCallback((data) => {
+      dispatch({ type: ACTIONS.ADD_EXPENSE, payload: data });
+    }, []),
+    
+    updateExpense: useCallback((id, updates) => {
+      dispatch({ type: ACTIONS.UPDATE_EXPENSE, payload: { id, updates } });
+    }, []),
+    
+    deleteExpense: useCallback((id) => {
+      dispatch({ type: ACTIONS.DELETE_EXPENSE, payload: id });
     }, []),
     
     // Orders

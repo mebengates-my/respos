@@ -27,6 +27,7 @@ export const translations = {
     logout: 'Logout',
     selectRole: 'Select Role',
     admin: 'Admin',
+    manager: 'Manager',
     server: 'Server',
     pin: 'PIN',
     enterPin: 'Enter PIN',
@@ -37,6 +38,7 @@ export const translations = {
     tables: 'Tables',
     reports: 'Reports',
     adminPanel: 'Admin Panel',
+    managerPanel: 'Manager Panel',
     settings: 'Settings',
     
     // Menu
@@ -93,6 +95,7 @@ export const translations = {
     change: 'Change',
     completePayment: 'Complete Payment',
     paymentSuccess: 'Payment Successful!',
+    serverNoPayment: 'Servers can only take orders. Payments are handled by an Admin or Manager.',
     
     // Reports
     salesReport: 'Sales Report',
@@ -166,6 +169,42 @@ export const translations = {
     tableManagement: 'Table Management',
     menuManagement: 'Menu Management',
     reportManagement: 'Report Management',
+    openOrders: 'Open Orders',
+    noOpenOrders: 'No open orders right now',
+    activeNow: 'Active now',
+    liveView: 'Live view of every unpaid order',
+    
+    // Expenses
+    expenses: 'Expenses',
+    expenseCategories: 'Expense Categories',
+    addExpense: 'Add Expense',
+    editExpense: 'Edit Expense',
+    deleteExpense: 'Delete Expense',
+    addExpenseCategory: 'Add Expense Category',
+    editExpenseCategory: 'Edit Expense Category',
+    expenseDescription: 'Description',
+    expenseAmount: 'Amount',
+    expenseDate: 'Date & Time',
+    expenseCategory: 'Category',
+    noExpenses: 'No expenses recorded',
+    expensesInCategory: 'expenses',
+    deleteExpenseCategoryWarning: 'All expenses inside this category will also be deleted.',
+    
+    // Profit & Loss
+    profitAndLoss: 'Profit & Loss',
+    totalExpenses: 'Total Expenses',
+    netProfit: 'Net Profit',
+    netLoss: 'Net Loss',
+    profitMargin: 'Profit Margin',
+    yesterday: 'Yesterday',
+    last7Days: 'Last 7 Days',
+    last30Days: 'Last 30 Days',
+    salesVsExpenses: 'Sales vs Expenses',
+    expensesByCategory: 'Expenses by Category',
+    salesLegend: 'Sales',
+    expensesLegend: 'Expenses',
+    bestSalesDay: 'Best sales day',
+    highestExpenseDay: 'Highest expense day',
   },
   
   bn: {
@@ -195,6 +234,7 @@ export const translations = {
     logout: 'লগআউট',
     selectRole: 'ভূমিকা নির্বাচন',
     admin: 'অ্যাডমিন',
+    manager: 'ম্যানেজার',
     server: 'সার্ভার',
     pin: 'পিন',
     enterPin: 'পিন দিন',
@@ -205,6 +245,7 @@ export const translations = {
     tables: 'টেবিল',
     reports: 'রিপোর্ট',
     adminPanel: 'অ্যাডমিন প্যানেল',
+    managerPanel: 'ম্যানেজার প্যানেল',
     settings: 'সেটিংস',
     
     // Menu
@@ -261,6 +302,7 @@ export const translations = {
     change: 'পরিবর্তন',
     completePayment: 'পেমেন্ট সম্পন্ন',
     paymentSuccess: 'পেমেন্ট সফল!',
+    serverNoPayment: 'সার্ভাররা শুধু অর্ডার নিতে পারেন। পেমেন্ট অ্যাডমিন বা ম্যানেজার করেন।',
     
     // Reports
     salesReport: 'বিক্রয় রিপোর্ট',
@@ -334,6 +376,42 @@ export const translations = {
     tableManagement: 'টেবিল ব্যবস্থাপনা',
     menuManagement: 'মেনু ব্যবস্থাপনা',
     reportManagement: 'রিপোর্ট ব্যবস্থাপনা',
+    openOrders: 'খোলা অর্ডার',
+    noOpenOrders: 'এখন কোনো খোলা অর্ডার নেই',
+    activeNow: 'এখন সক্রিয়',
+    liveView: 'সব অবিশোধিত অর্ডারের লাইভ ভিউ',
+    
+    // Expenses
+    expenses: 'খরচ',
+    expenseCategories: 'খরচের ক্যাটাগরি',
+    addExpense: 'খরচ যোগ করুন',
+    editExpense: 'খরচ সম্পাদনা',
+    deleteExpense: 'খরচ মুছুন',
+    addExpenseCategory: 'খরচের ক্যাটাগরি যোগ',
+    editExpenseCategory: 'খরচের ক্যাটাগরি সম্পাদনা',
+    expenseDescription: 'বিবরণ',
+    expenseAmount: 'পরিমাণ',
+    expenseDate: 'তারিখ ও সময়',
+    expenseCategory: 'ক্যাটাগরি',
+    noExpenses: 'কোনো খরচ রেকর্ড নেই',
+    expensesInCategory: 'খরচ',
+    deleteExpenseCategoryWarning: 'এই ক্যাটাগরির সব খরচও মুছে যাবে।',
+    
+    // Profit & Loss
+    profitAndLoss: 'লাভ-ক্ষতি',
+    totalExpenses: 'মোট খরচ',
+    netProfit: 'নিট লাভ',
+    netLoss: 'নিট ক্ষতি',
+    profitMargin: 'লাভের হার',
+    yesterday: 'গতকাল',
+    last7Days: 'শেষ ৭ দিন',
+    last30Days: 'শেষ ৩০ দিন',
+    salesVsExpenses: 'বিক্রয় বনাম খরচ',
+    expensesByCategory: 'ক্যাটাগরি অনুযায়ী খরচ',
+    salesLegend: 'বিক্রয়',
+    expensesLegend: 'খরচ',
+    bestSalesDay: 'সেরা বিক্রয়ের দিন',
+    highestExpenseDay: 'সর্বোচ্চ খরচের দিন',
   }
 };
 

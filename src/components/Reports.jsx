@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { useApp } from '../context/AppContext';
 import { formatPrice, calculateTopItems, calculateHourlyDistribution } from '../utils/helpers';
+import { downloadSalesReportPdf } from '../utils/pdfReport';
 import {
   ArrowLeft,
   TrendingUp,
@@ -21,6 +22,12 @@ export default function Reports() {
   
   const [dateRange, setDateRange] = useState('today'); // 'today' | 'week' | 'month'
   const [showDetails, setShowDetails] = useState(false);
+  
+  const handleExportPdf = (orders) => {
+    if (orders.length === 0) return;
+    const rangeLabel = dateRange === 'today' ? 'Today' : dateRange === 'week' ? 'This Week' : 'This Month';
+    downloadSalesReportPdf({ rangeLabel, orders });
+  };
   
   // Filter orders based on date range
   const filteredOrders = useMemo(() => {
@@ -122,9 +129,13 @@ export default function Reports() {
               ))}
             </div>
             
-            <button className="flex items-center gap-2 px-4 py-2 bg-latte/10 text-espresso rounded-xl font-medium hover:bg-latte/20 transition-colors btn-press">
+            <button
+              onClick={() => handleExportPdf(filteredOrders)}
+              disabled={filteredOrders.length === 0}
+              className="flex items-center gap-2 px-4 py-2 bg-error text-white rounded-xl font-medium hover:bg-error/90 transition-colors btn-press disabled:opacity-50 disabled:cursor-not-allowed"
+            >
               <Download className="w-5 h-5" />
-              Export
+              Download PDF
             </button>
           </div>
         </div>

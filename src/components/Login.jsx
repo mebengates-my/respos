@@ -6,6 +6,7 @@ import {
   User,
   Shield,
   Users,
+  Briefcase,
   ArrowRight,
   AlertCircle,
   Globe
@@ -47,8 +48,12 @@ export default function Login() {
     setError('');
   };
   
-  const admins = users.filter(u => u.role === 'admin');
-  const servers = users.filter(u => u.role === 'server');
+  // One section per role, in order of responsibility.
+  const roleSections = [
+    { role: 'admin', icon: Shield, iconWrap: 'bg-espresso/10 text-espresso', avatar: 'bg-espresso', users: users.filter(u => u.role === 'admin') },
+    { role: 'manager', icon: Briefcase, iconWrap: 'bg-accent/10 text-accent', avatar: 'bg-accent', users: users.filter(u => u.role === 'manager') },
+    { role: 'server', icon: Users, iconWrap: 'bg-success/10 text-success', avatar: 'bg-success', users: users.filter(u => u.role === 'server') },
+  ].filter(section => section.users.length > 0);
   
   return (
     <div className="min-h-screen bg-gradient-to-br from-espresso via-espresso to-dark-roast flex items-center justify-center p-4">
@@ -121,66 +126,37 @@ export default function Login() {
           className="bg-white rounded-3xl shadow-2xl overflow-hidden"
         >
           {!selectedUser ? (
-            <div className="p-8">
-              {/* Admin Section */}
-              <div className="mb-8">
-                <div className="flex items-center gap-3 mb-4">
-                  <div className="w-10 h-10 bg-espresso/10 rounded-xl flex items-center justify-center">
-                    <Shield className="w-5 h-5 text-espresso" />
+            <div className="p-8 space-y-8">
+              {roleSections.map(({ role, icon: RoleIcon, iconWrap, avatar, users: roleUsers }) => (
+                <div key={role}>
+                  <div className="flex items-center gap-3 mb-4">
+                    <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${iconWrap}`}>
+                      <RoleIcon className="w-5 h-5" />
+                    </div>
+                    <h2 className="text-lg font-semibold text-dark-roast">{t(role, language)}</h2>
                   </div>
-                  <h2 className="text-lg font-semibold text-dark-roast">{t('admin', language)}</h2>
-                </div>
-                <div className="grid grid-cols-2 gap-3">
-                  {admins.map(user => (
-                    <button
-                      key={user.id}
-                      onClick={() => handleUserSelect(user)}
-                      className="flex items-center gap-3 p-4 bg-cream rounded-xl hover:bg-latte/20 transition-colors text-left group"
-                    >
-                      <div className="w-12 h-12 bg-espresso rounded-xl flex items-center justify-center">
-                        <User className="w-6 h-6 text-white" />
-                      </div>
-                      <div className="flex-1">
-                        <p className="font-semibold text-dark-roast group-hover:text-accent transition-colors">
-                          {user.name}
-                        </p>
-                        <p className="text-sm text-medium-roast capitalize">{user.role}</p>
-                      </div>
-                      <ArrowRight className="w-5 h-5 text-latte group-hover:text-accent transition-colors" />
-                    </button>
-                  ))}
-                </div>
-              </div>
-              
-              {/* Server Section */}
-              <div>
-                <div className="flex items-center gap-3 mb-4">
-                  <div className="w-10 h-10 bg-success/10 rounded-xl flex items-center justify-center">
-                    <Users className="w-5 h-5 text-success" />
+                  <div className="grid grid-cols-2 gap-3">
+                    {roleUsers.map(user => (
+                      <button
+                        key={user.id}
+                        onClick={() => handleUserSelect(user)}
+                        className="flex items-center gap-3 p-4 bg-cream rounded-xl hover:bg-latte/20 transition-colors text-left group"
+                      >
+                        <div className={`w-12 h-12 ${avatar} rounded-xl flex items-center justify-center`}>
+                          <User className="w-6 h-6 text-white" />
+                        </div>
+                        <div className="flex-1">
+                          <p className="font-semibold text-dark-roast group-hover:text-accent transition-colors">
+                            {user.name}
+                          </p>
+                          <p className="text-sm text-medium-roast">{t(user.role, language)}</p>
+                        </div>
+                        <ArrowRight className="w-5 h-5 text-latte group-hover:text-accent transition-colors" />
+                      </button>
+                    ))}
                   </div>
-                  <h2 className="text-lg font-semibold text-dark-roast">{t('server', language)}</h2>
                 </div>
-                <div className="grid grid-cols-2 gap-3">
-                  {servers.map(user => (
-                    <button
-                      key={user.id}
-                      onClick={() => handleUserSelect(user)}
-                      className="flex items-center gap-3 p-4 bg-cream rounded-xl hover:bg-latte/20 transition-colors text-left group"
-                    >
-                      <div className="w-12 h-12 bg-success rounded-xl flex items-center justify-center">
-                        <User className="w-6 h-6 text-white" />
-                      </div>
-                      <div className="flex-1">
-                        <p className="font-semibold text-dark-roast group-hover:text-accent transition-colors">
-                          {user.name}
-                        </p>
-                        <p className="text-sm text-medium-roast capitalize">{user.role}</p>
-                      </div>
-                      <ArrowRight className="w-5 h-5 text-latte group-hover:text-accent transition-colors" />
-                    </button>
-                  ))}
-                </div>
-              </div>
+              ))}
             </div>
           ) : (
             /* PIN Entry */
@@ -199,7 +175,7 @@ export default function Login() {
                 <h2 className="text-2xl font-display font-bold text-dark-roast mb-1">
                   {selectedUser.name}
                 </h2>
-                <p className="text-medium-roast capitalize">{selectedUser.role}</p>
+                <p className="text-medium-roast">{t(selectedUser.role, language)}</p>
               </div>
               
               <div className="max-w-xs mx-auto">

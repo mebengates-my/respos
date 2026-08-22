@@ -48,7 +48,8 @@ export default function PaymentModal() {
     }
   }, [step]);
   
-  if (!isPaymentModalOpen || !currentOrder) return null;
+  // Servers never collect money — the payment flow is Admin/Manager only.
+  if (!isPaymentModalOpen || !currentOrder || state.currentUser?.role === 'server') return null;
   
   const total = currentOrder.total;
   const change = calculateChange(amountPaid, total);
