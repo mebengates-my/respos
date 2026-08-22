@@ -30,7 +30,10 @@ function emptyDb() {
 }
 
 function loadDb() {
-  return loadFromStorage(MOCK_STORAGE_KEY, emptyDb());
+  // Guard against a corrupt/null stored value (e.g. after mockReset writes
+  // null, which round-trips as the string "null" and parses back to null).
+  const db = loadFromStorage(MOCK_STORAGE_KEY, emptyDb());
+  return db && typeof db === 'object' ? db : emptyDb();
 }
 
 function saveDb(db) {
@@ -220,4 +223,76 @@ export async function mockCreateMember({ storeId, email, password, displayName, 
 export function mockReset() {
   saveToStorage(MOCK_STORAGE_KEY, null);
   saveToStorage(MOCK_SESSION_KEY, null);
+}
+
+// List every staff member of a store as an app-shaped user record (the same
+// shape the User Management view renders). The mock equivalent of a
+// `store_members` + `profiles` join.
+export async function mockListStoreMembers(storeId) {
+  await delay();
+  const db = loadDb();
+  const members = db.memberships
+    .filter((m) => m.storeId === storeId && m.active !== false)
+    .map((m) => {
+      const profile = db.profiles.find((p) => p.id === m.profileId);
+      return {
+        id: m.profileId,
+        name: m.displayName || profile?.displayName || '',
+        role: m.role,
+        pin: m.pin || '',
+        active: m.active !== false,
+        cloud: true,
+        storeId: m.storeId,
+        email: profile?.email || '',
+      };
+    });
+  return { data: members, error: null };
+}
+
+// Update a member's name/role (and PIN when provided). Mock of the service-role
+// route's `update` action — here it is done directly on the in-memory DB.
+export async function mockUpdateStoreMember({ storeId, profileId, displayName, role, pin }) {
+  await delay();
+  const db = loadDb();
+  const membership = db.memberships.find(
+    (m) => m.storeId === storeId && m.profileId === profileId
+  );
+  if (!membership) {
+    return { data: null, error: { message: 'Member not found' } };
+  }
+  if (displayName) membership.displayName = displayName;
+  if (role) membership.role = role;
+  if (pin) membership.pin = pin;
+
+  const user = db.users.find((u) => u.id === profileId);
+  if (user) {
+    if (displayName) {
+      user.displayName = displayName;
+      const profile = db.profiles.find((p) => p.id === profileId);
+      if (profile) profile.displayName = displayName;
+    }
+    if (pin) user.password = pin;
+  }
+  saveDb(db);
+  return {
+    data: { storeId, profileId, role: membership.role, displayName: membership.displayName },
+    error: null,
+  };
+}
+
+// Remove a member: drop the membership and the underlying (mock) auth user.
+export async function mockRemoveStoreMember({ storeId, profileId }) {
+  await delay();
+  const db = loadDb();
+  const index = db.memberships.findIndex(
+    (m) => m.storeId === storeId && m.profileId === profileId
+  );
+  if (index === -1) {
+    return { data: null, error: { message: 'Member not found' } };
+  }
+  db.memberships.splice(index, 1);
+  db.users = db.users.filter((u) => u.id !== profileId);
+  db.profiles = db.profiles.filter((p) => p.id !== profileId);
+  saveDb(db);
+  return { data: { ok: true }, error: null };
 }
