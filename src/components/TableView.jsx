@@ -1,5 +1,6 @@
 import React from 'react';
 import { useApp } from '../context/AppContext';
+import { useConfirm } from './ConfirmDialog';
 import { formatPrice, formatElapsedTime } from '../utils/helpers';
 import {
   ArrowLeft,
@@ -18,6 +19,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 
 export default function TableView() {
   const { state, actions } = useApp();
+  const confirm = useConfirm();
   const { tables, heldOrders, currentOrder } = state;
   
   const [showHeldOrders, setShowHeldOrders] = React.useState(false);
@@ -59,7 +61,7 @@ export default function TableView() {
     actions.addToast(`Tap a free table to move Table ${table.number} to`, 'info');
   };
   
-  const confirmTransfer = (targetTable) => {
+  const confirmTransfer = async (targetTable) => {
     if (!transferFrom) return;
     const fromTable = tables.find(t => t.id === transferFrom);
     setTransferFrom(null);
@@ -69,14 +71,25 @@ export default function TableView() {
       actions.addToast('Pick an available dining table', 'error');
       return;
     }
-    if (confirm(`Move the order from Table ${fromTable.number} to Table ${targetTable.number}?`)) {
+    const ok = await confirm({
+      title: 'Transfer order?',
+      message: `Move the order from Table ${fromTable.number} to Table ${targetTable.number}?`,
+      confirmLabel: 'Transfer',
+    });
+    if (ok) {
       actions.transferTable(fromTable.id, targetTable.id);
       actions.addToast(`Order moved to Table ${targetTable.number}`, 'success');
     }
   };
   
-  const cancelReservation = (table) => {
-    if (confirm(`Cancel reservation for Table ${table.number}?`)) {
+  const cancelReservation = async (table) => {
+    const ok = await confirm({
+      title: 'Cancel reservation?',
+      message: `Cancel reservation for Table ${table.number}?`,
+      confirmLabel: 'Cancel reservation',
+      danger: true,
+    });
+    if (ok) {
       actions.updateTableStatus(table.id, 'available');
       actions.addToast(`Table ${table.number} is now available`, 'info');
     }
@@ -94,8 +107,14 @@ export default function TableView() {
     actions.addToast(`Table ${table.number} marked clean`, 'success');
   };
   
-  const clearTable = (table) => {
-    if (confirm(`Free up Table ${table.number}? (mark as available)`)) {
+  const clearTable = async (table) => {
+    const ok = await confirm({
+      title: 'Clear table?',
+      message: `Free up Table ${table.number}? (mark as available)`,
+      confirmLabel: 'Clear',
+      danger: true,
+    });
+    if (ok) {
       actions.updateTableStatus(table.id, 'available');
       actions.addToast(`Table ${table.number} cleared`, 'info');
     }

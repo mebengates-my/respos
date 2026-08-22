@@ -21,28 +21,44 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { discountPresets } from '../data/menuData';
+import { useConfirm } from './ConfirmDialog';
+import HeldOrdersModal from './HeldOrdersModal';
 
 export default function OrderPanel() {
   const { state, actions } = useApp();
-  const { currentOrder, selectedTable, taxRate, discountPresets: presets } = state;
+  const { currentOrder, selectedTable, taxRate, discountPresets: presets, heldOrders } = state;
+  const confirm = useConfirm();
   const [showDiscounts, setShowDiscounts] = useState(false);
   const [showNotes, setShowNotes] = useState(false);
   const [noteText, setNoteText] = useState('');
+  const [showHeldOrders, setShowHeldOrders] = useState(false);
   
   const isEmpty = !currentOrder || currentOrder.items.length === 0;
   
-  const handleClearOrder = () => {
+  const handleClearOrder = async () => {
     if (currentOrder && currentOrder.items.length > 0) {
-      if (confirm('Clear all items from this order?')) {
+      const ok = await confirm({
+        title: 'Clear order?',
+        message: 'Clear all items from this order? This cannot be undone.',
+        confirmLabel: 'Clear',
+        danger: true,
+      });
+      if (ok) {
         actions.clearOrder();
         actions.addToast('Order cleared', 'info');
       }
     }
   };
   
-  const handleVoidOrder = () => {
+  const handleVoidOrder = async () => {
     if (currentOrder && currentOrder.items.length > 0) {
-      if (confirm('Void this entire order?')) {
+      const ok = await confirm({
+        title: 'Void order?',
+        message: 'Void this entire order?',
+        confirmLabel: 'Void',
+        danger: true,
+      });
+      if (ok) {
         actions.voidOrder();
         actions.addToast('Order voided', 'error');
       }
@@ -79,6 +95,17 @@ export default function OrderPanel() {
               </p>
             </div>
           </div>
+          
+          {heldOrders.length > 0 && (
+            <button
+              onClick={() => setShowHeldOrders(true)}
+              className="flex items-center gap-1.5 px-3 py-2 bg-warning/10 text-warning rounded-lg text-sm font-medium hover:bg-warning/20 transition-colors btn-press"
+              title="Held orders"
+            >
+              <Pause className="w-4 h-4" />
+              <span>Held ({heldOrders.length})</span>
+            </button>
+          )}
           
           {currentOrder && (
             <div className="flex gap-2">
@@ -344,6 +371,12 @@ export default function OrderPanel() {
           </button>
         </div>
       </div>
+      
+      {/* Held Orders Modal */}
+      <HeldOrdersModal
+        open={showHeldOrders}
+        onClose={() => setShowHeldOrders(false)}
+      />
     </div>
   );
 }

@@ -2,11 +2,14 @@ import React from 'react';
 import { useApp } from '../context/AppContext';
 import {
   Coffee,
-  CupSoda,
-  GlassWater,
+  Utensils,
+  Beef,
+  Drumstick,
+  Fish,
+  Leaf,
   Croissant,
-  Sandwich,
-  Gift,
+  Candy,
+  Cake,
   Plus,
   Minus,
   Check,
@@ -17,12 +20,15 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { modifiers as modifierOptions } from '../data/menuData';
 
 const categoryIcons = {
-  'hot-drinks': Coffee,
-  'tea': CupSoda,
-  'cold-drinks': GlassWater,
-  'pastries': Croissant,
-  'sandwiches': Sandwich,
-  'combos': Gift,
+  'rice': Utensils,
+  'beef-mutton': Beef,
+  'chicken': Drumstick,
+  'fish': Fish,
+  'vegetarian': Leaf,
+  'bread': Croissant,
+  'snacks': Candy,
+  'desserts': Cake,
+  'drinks': Coffee,
 };
 
 export default function MenuPanel() {

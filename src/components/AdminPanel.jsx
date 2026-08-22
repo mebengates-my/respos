@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
 import { t } from '../data/language';
 import { loadStoreSettings, saveStoreSettings } from '../data/storeSettings';
+import { useConfirm } from './ConfirmDialog';
 import {
   LayoutDashboard,
   Users,
@@ -28,7 +29,8 @@ import {
   ChevronUp,
   Printer,
   Save,
-  RefreshCw
+  RefreshCw,
+  LayoutGrid
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -44,6 +46,7 @@ const AdminViews = {
 
 export default function AdminPanel() {
   const { state, actions } = useApp();
+  const confirm = useConfirm();
   const { language, users, categories, tables, menuItems, orderHistory } = state;
   const [currentView, setCurrentView] = useState(AdminViews.SETTINGS);
   
@@ -57,8 +60,14 @@ export default function AdminPanel() {
     { id: AdminViews.SETTINGS, icon: Settings, label: t('settings', language) },
   ];
   
-  const handleLogout = () => {
-    if (confirm(t('confirmDelete', language))) {
+  const handleLogout = async () => {
+    const ok = await confirm({
+      title: t('logout', language) + '?',
+      message: 'You will need to enter your PIN again to sign back in.',
+      confirmLabel: t('logout', language),
+      danger: true,
+    });
+    if (ok) {
       actions.logout();
     }
   };
@@ -97,6 +106,14 @@ export default function AdminPanel() {
         </nav>
         
         <div className="p-4 border-t border-latte/30 space-y-2">
+          <button
+            onClick={() => actions.setView('pos')}
+            className="w-full flex items-center gap-3 px-4 py-3 rounded-xl bg-accent text-white hover:bg-accent/90 transition-colors"
+          >
+            <LayoutGrid className="w-5 h-5" />
+            <span className="font-medium">Back to POS</span>
+          </button>
+          
           <button
             onClick={() => actions.setLanguage(language === 'en' ? 'bn' : 'en')}
             className="w-full flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-latte/20 text-latte hover:text-white transition-colors"
@@ -164,6 +181,7 @@ function DashboardView({ language, state }) {
 // Users View
 function UsersView({ language, state, actions }) {
   const { users } = state;
+  const confirm = useConfirm();
   const [showModal, setShowModal] = useState(false);
   const [editingUser, setEditingUser] = useState(null);
   const [formData, setFormData] = useState({ name: '', role: 'server', pin: '' });
@@ -194,7 +212,7 @@ function UsersView({ language, state, actions }) {
                 <td className="px-6 py-4 font-mono text-medium-roast">••••</td>
                 <td className="px-6 py-4"><div className="flex justify-end gap-2">
                   <button onClick={() => { setEditingUser(user); setFormData({ name: user.name, role: user.role, pin: user.pin }); setShowModal(true); }} className="p-2 hover:bg-latte/20 rounded-lg"><Edit className="w-4 h-4 text-medium-roast" /></button>
-                  <button onClick={() => { if (confirm(t('confirmDelete', language))) { actions.deleteUser(user.id); } }} className="p-2 hover:bg-error/10 rounded-lg"><Trash2 className="w-4 h-4 text-error" /></button>
+                  <button onClick={async () => { if (await confirm({ title: t('deleteUser', language), message: t('confirmDelete', language), confirmLabel: t('delete', language), danger: true })) { actions.deleteUser(user.id); } }} className="p-2 hover:bg-error/10 rounded-lg"><Trash2 className="w-4 h-4 text-error" /></button>
                 </div></td>
               </tr>
             ))}
@@ -222,6 +240,7 @@ function UsersView({ language, state, actions }) {
 // Categories View
 function CategoriesView({ language, state, actions }) {
   const { categories, menuItems } = state;
+  const confirm = useConfirm();
   const [showModal, setShowModal] = useState(false);
   const [editingCategory, setEditingCategory] = useState(null);
   const [formData, setFormData] = useState({ name: '', icon: 'Coffee' });
@@ -248,7 +267,7 @@ function CategoriesView({ language, state, actions }) {
               <div className="w-12 h-12 bg-espresso/10 rounded-xl flex items-center justify-center"><Coffee className="w-6 h-6 text-espresso" /></div>
               <div className="flex gap-1">
                 <button onClick={() => { setEditingCategory(cat); setFormData({ name: cat.name, icon: cat.icon }); setShowModal(true); }} className="p-1.5 hover:bg-latte/20 rounded-lg"><Edit className="w-4 h-4" /></button>
-                <button onClick={() => { if (confirm(t('confirmDelete', language))) { actions.deleteCategory(cat.id); } }} className="p-1.5 hover:bg-error/10 rounded-lg"><Trash2 className="w-4 h-4 text-error" /></button>
+                <button onClick={async () => { if (await confirm({ title: t('categoryName', language), message: t('confirmDelete', language), confirmLabel: t('delete', language), danger: true })) { actions.deleteCategory(cat.id); } }} className="p-1.5 hover:bg-error/10 rounded-lg"><Trash2 className="w-4 h-4 text-error" /></button>
               </div>
             </div>
             <h3 className="font-semibold text-dark-roast">{cat.name}</h3>
@@ -273,6 +292,7 @@ function CategoriesView({ language, state, actions }) {
 // Menu Items View (simplified - same as before)
 function MenuItemsView({ language, state, actions }) {
   const { categories, menuItems } = state;
+  const confirm = useConfirm();
   const [showModal, setShowModal] = useState(false);
   const [editingItem, setEditingItem] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
@@ -336,7 +356,7 @@ function MenuItemsView({ language, state, actions }) {
                 <motion.div initial={{ height: 0 }} animate={{ height: 'auto' }} exit={{ height: 0 }} className="overflow-hidden"><div className="border-t border-latte/10">{items.map(item => (
                   <div key={item.id} className={`flex items-center justify-between p-4 hover:bg-cream/50 ${!item.available ? 'bg-error/5' : ''}`}>
                     <div className="flex-1"><div className="flex items-center gap-3"><h4 className={`font-medium ${!item.available ? 'text-medium-roast line-through' : ''}`}>{item.name}</h4>{!item.available && <span className="px-2 py-0.5 bg-error/10 text-error text-xs rounded-full">{t('itemUnavailable', language)}</span>}</div><p className="text-sm text-medium-roast">{item.description}</p></div>
-                    <div className="flex items-center gap-4"><span className="font-mono font-semibold text-espresso">RM {(item.price / 100).toFixed(2)}</span><button onClick={() => actions.toggleItemAvailability(item.id)} className={`p-2 rounded-lg ${item.available ? 'hover:bg-success/10 text-success' : 'hover:bg-error/10 text-error'}`}>{item.available ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}</button><button onClick={() => { setEditingItem(item); setFormData({ name: item.name, categoryId: item.categoryId, price: (item.price / 100).toString(), description: item.description || '', available: item.available }); setShowModal(true); }} className="p-2 hover:bg-latte/20 rounded-lg"><Edit className="w-4 h-4" /></button><button onClick={() => { if (confirm(t('confirmDelete', language))) actions.deleteMenuItem(item.id); }} className="p-2 hover:bg-error/10 rounded-lg"><Trash2 className="w-4 h-4 text-error" /></button></div>
+                    <div className="flex items-center gap-4"><span className="font-mono font-semibold text-espresso">RM {(item.price / 100).toFixed(2)}</span><button onClick={() => actions.toggleItemAvailability(item.id)} className={`p-2 rounded-lg ${item.available ? 'hover:bg-success/10 text-success' : 'hover:bg-error/10 text-error'}`}>{item.available ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}</button><button onClick={() => { setEditingItem(item); setFormData({ name: item.name, categoryId: item.categoryId, price: (item.price / 100).toString(), description: item.description || '', available: item.available }); setShowModal(true); }} className="p-2 hover:bg-latte/20 rounded-lg"><Edit className="w-4 h-4" /></button><button onClick={async () => { if (await confirm({ title: t('menuItems', language), message: t('confirmDelete', language), confirmLabel: t('delete', language), danger: true })) actions.deleteMenuItem(item.id); }} className="p-2 hover:bg-error/10 rounded-lg"><Trash2 className="w-4 h-4 text-error" /></button></div>
                   </div>
                 ))}</div></motion.div>
               )}</AnimatePresence>
@@ -346,7 +366,7 @@ function MenuItemsView({ language, state, actions }) {
           <div className="bg-white rounded-2xl shadow-sm overflow-hidden"><div className="border-b border-latte/10">{filteredItems.map(item => (
             <div key={item.id} className={`flex items-center justify-between p-4 hover:bg-cream/50 ${!item.available ? 'bg-error/5' : ''}`}>
               <div className="flex-1"><div className="flex items-center gap-3"><h4 className={`font-medium ${!item.available ? 'text-medium-roast line-through' : ''}`}>{item.name}</h4>{!item.available && <span className="px-2 py-0.5 bg-error/10 text-error text-xs rounded-full">{t('itemUnavailable', language)}</span>}</div><p className="text-sm text-medium-roast">{item.description}</p></div>
-              <div className="flex items-center gap-4"><span className="font-mono font-semibold text-espresso">RM {(item.price / 100).toFixed(2)}</span><button onClick={() => actions.toggleItemAvailability(item.id)} className={`p-2 rounded-lg ${item.available ? 'hover:bg-success/10 text-success' : 'hover:bg-error/10 text-error'}`}>{item.available ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}</button><button onClick={() => { setEditingItem(item); setFormData({ name: item.name, categoryId: item.categoryId, price: (item.price / 100).toString(), description: item.description || '', available: item.available }); setShowModal(true); }} className="p-2 hover:bg-latte/20 rounded-lg"><Edit className="w-4 h-4" /></button><button onClick={() => { if (confirm(t('confirmDelete', language))) actions.deleteMenuItem(item.id); }} className="p-2 hover:bg-error/10 rounded-lg"><Trash2 className="w-4 h-4 text-error" /></button></div>
+              <div className="flex items-center gap-4"><span className="font-mono font-semibold text-espresso">RM {(item.price / 100).toFixed(2)}</span><button onClick={() => actions.toggleItemAvailability(item.id)} className={`p-2 rounded-lg ${item.available ? 'hover:bg-success/10 text-success' : 'hover:bg-error/10 text-error'}`}>{item.available ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}</button><button onClick={() => { setEditingItem(item); setFormData({ name: item.name, categoryId: item.categoryId, price: (item.price / 100).toString(), description: item.description || '', available: item.available }); setShowModal(true); }} className="p-2 hover:bg-latte/20 rounded-lg"><Edit className="w-4 h-4" /></button><button onClick={async () => { if (await confirm({ title: t('menuItems', language), message: t('confirmDelete', language), confirmLabel: t('delete', language), danger: true })) actions.deleteMenuItem(item.id); }} className="p-2 hover:bg-error/10 rounded-lg"><Trash2 className="w-4 h-4 text-error" /></button></div>
             </div>
           ))}</div></div>
         )}
@@ -374,6 +394,7 @@ function MenuItemsView({ language, state, actions }) {
 // Tables View
 function TablesView({ language, state, actions }) {
   const { tables } = state;
+  const confirm = useConfirm();
   const [showModal, setShowModal] = useState(false);
   const [editingTable, setEditingTable] = useState(null);
   const [formData, setFormData] = useState({ number: '', capacity: 4 });
@@ -396,7 +417,7 @@ function TablesView({ language, state, actions }) {
       <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
         {tables.filter(t => !t.isCounter).map(table => (
           <div key={table.id} className="bg-white rounded-2xl p-4 shadow-sm">
-            <div className="flex items-center justify-between mb-3"><span className="text-3xl font-display font-bold text-espresso">{table.number}</span><div className="flex gap-1"><button onClick={() => { setEditingTable(table); setFormData({ number: table.number.toString(), capacity: table.capacity }); setShowModal(true); }} className="p-1.5 hover:bg-latte/20 rounded-lg"><Edit className="w-4 h-4" /></button><button onClick={() => { if (confirm(t('confirmDelete', language))) actions.deleteTable(table.id); }} className="p-1.5 hover:bg-error/10 rounded-lg"><Trash2 className="w-4 h-4 text-error" /></button></div></div>
+            <div className="flex items-center justify-between mb-3"><span className="text-3xl font-display font-bold text-espresso">{table.number}</span><div className="flex gap-1"><button onClick={() => { setEditingTable(table); setFormData({ number: table.number.toString(), capacity: table.capacity }); setShowModal(true); }} className="p-1.5 hover:bg-latte/20 rounded-lg"><Edit className="w-4 h-4" /></button><button onClick={async () => { if (await confirm({ title: t('deleteTable', language), message: t('confirmDelete', language), confirmLabel: t('delete', language), danger: true })) actions.deleteTable(table.id); }} className="p-1.5 hover:bg-error/10 rounded-lg"><Trash2 className="w-4 h-4 text-error" /></button></div></div>
             <p className="text-sm text-medium-roast">{table.capacity} {t('seats', language)}</p>
             <div className="mt-2 flex items-center gap-2"><div className={`w-2 h-2 rounded-full ${table.status === 'available' ? 'bg-success' : table.status === 'occupied' ? 'bg-warning' : table.status === 'reserved' ? 'bg-medium-roast' : 'bg-latte'}`} /><span className="text-xs text-medium-roast capitalize">{t(table.status, language)}</span></div>
           </div>
@@ -497,6 +518,7 @@ function ReportsView({ language, state, actions }) {
 // ==================== STORE SETTINGS VIEW (NEW!) ====================
 function StoreSettingsView({ language, state, actions }) {
   const [settings, setSettings] = useState(loadStoreSettings);
+  const confirm = useConfirm();
   const [saved, setSaved] = useState(false);
   
   const handleSave = () => {
@@ -506,8 +528,14 @@ function StoreSettingsView({ language, state, actions }) {
     actions.addToast('Settings saved!', 'success');
   };
   
-  const handleReset = () => {
-    if (confirm('Reset to default settings?')) {
+  const handleReset = async () => {
+    const ok = await confirm({
+      title: 'Reset settings?',
+      message: 'Reset to default settings? Your current customizations will be lost.',
+      confirmLabel: 'Reset',
+      danger: true,
+    });
+    if (ok) {
       setSettings(loadStoreSettings());
       saveStoreSettings(loadStoreSettings());
       actions.addToast('Settings reset to default', 'info');

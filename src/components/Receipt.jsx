@@ -2,6 +2,7 @@ import React, { useRef } from 'react';
 import { Printer, Download, X } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { loadStoreSettings } from '../data/storeSettings';
+import { useApp } from '../context/AppContext';
 
 // Currency-aware price formatter
 const formatPriceFromCents = (cents, settings) => {
@@ -195,6 +196,7 @@ export const downloadReceiptText = (order, settingsOverride) => {
 
 export default function Receipt({ order, onClose, showPrint = true }) {
   const printRef = useRef(null);
+  const { actions } = useApp();
   const settings = loadStoreSettings();
   
   if (!order) return null;
@@ -204,7 +206,7 @@ export default function Receipt({ order, onClose, showPrint = true }) {
   const handlePrint = () => {
     const ok = printThermalReceipt(order, settings);
     if (!ok) {
-      alert('Please allow pop-ups to print the receipt. You can still download it instead.');
+      actions.addToast('Please allow pop-ups to print the receipt. You can still download it instead.', 'error');
     }
   };
   

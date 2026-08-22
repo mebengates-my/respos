@@ -97,7 +97,7 @@ const initialState = {
   view: 'pos', // 'pos' | 'tables' | 'reports' | 'admin'
   
   // Menu
-  selectedCategory: initialCategories[0]?.id || 'hot-drinks',
+  selectedCategory: initialCategories[0]?.id || 'rice',
   categories: initialCategories,
   menuItems: initialMenuItems,
   discountPresets,
