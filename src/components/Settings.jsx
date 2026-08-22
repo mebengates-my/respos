@@ -3,14 +3,9 @@ import { useApp } from '../context/AppContext';
 import {
   ArrowLeft,
   Coffee,
-  Percent,
   Building,
-  Phone,
   Printer,
   Wifi,
-  WifiOff,
-  Moon,
-  Sun,
   Bell,
   Trash2,
   RefreshCw,
@@ -80,8 +75,8 @@ export default function Settings() {
               value={state.isOffline ? 'Offline' : 'Online'}
               valueColor={state.isOffline ? 'text-error' : 'text-success'}
             />
-            <SettingRow label="Data Synced" value="Just now" />
-            <SettingRow label="Last Backup" value="Today, 2:30 PM" />
+            <SettingRow label="Data Storage" value="Saved on this device" valueColor="text-medium-roast" />
+            <SettingRow label="Cloud Sync" value="Not configured" valueColor="text-warning" />
           </SettingsSection>
           
           {/* Notifications */}

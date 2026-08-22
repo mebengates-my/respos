@@ -1,4 +1,3 @@
-import React from 'react';
 import { useApp } from '../context/AppContext';
 import {
   Coffee,
@@ -11,29 +10,25 @@ import {
   Candy,
   Cake,
   Plus,
-  Minus,
-  Check,
-  X,
   Flame
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { modifiers as modifierOptions } from '../data/menuData';
 
 const categoryIcons = {
-  'rice': Utensils,
-  'beef-mutton': Beef,
-  'chicken': Drumstick,
-  'fish': Fish,
-  'vegetarian': Leaf,
-  'bread': Croissant,
-  'snacks': Candy,
-  'desserts': Cake,
-  'drinks': Coffee,
+  Utensils,
+  Beef,
+  Drumstick,
+  Fish,
+  Leaf,
+  Croissant,
+  Candy,
+  Cake,
+  Coffee,
 };
 
 export default function MenuPanel() {
   const { state, actions } = useApp();
-  const { categories, menuItems, selectedCategory, currentOrder } = state;
+  const { categories, menuItems, selectedCategory } = state;
   
   const filteredItems = menuItems.filter(item => item.categoryId === selectedCategory);
   
@@ -115,20 +110,9 @@ export default function MenuPanel() {
 }
 
 function MenuItemCard({ item, onAdd, disabled }) {
-  const { state, actions } = useApp();
-  const [showQuantity, setShowQuantity] = React.useState(false);
-  const [quantity, setQuantity] = React.useState(1);
-  
-  const handleAdd = (e) => {
-    e.stopPropagation();
-    if (disabled) return;
-    
-    if (item.modifiers && item.modifiers.length > 0) {
-      actions.openModifierModal(item);
-    } else {
-      actions.addItem(item, [], 1, '');
-      actions.addToast(`Added ${item.name}`, 'success');
-    }
+  const handleAdd = (event) => {
+    event.stopPropagation();
+    if (!disabled) onAdd();
   };
   
   return (

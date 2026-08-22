@@ -14,7 +14,6 @@ import {
   Plus,
   Edit,
   Trash2,
-  X,
   Check,
   Download,
   DollarSign,
@@ -48,7 +47,8 @@ export default function AdminPanel() {
   const { state, actions } = useApp();
   const confirm = useConfirm();
   const { language, users, categories, tables, menuItems, orderHistory } = state;
-  const [currentView, setCurrentView] = useState(AdminViews.SETTINGS);
+  // Start every admin session on the operational overview rather than Settings.
+  const [currentView, setCurrentView] = useState(AdminViews.DASHBOARD);
   
   const navItems = [
     { id: AdminViews.DASHBOARD, icon: LayoutDashboard, label: t('dashboard', language) },

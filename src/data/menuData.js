@@ -1,14 +1,18 @@
-// Menu categories with icons
+// Menu schema version. Bump this when the starter menu/category relationship changes.
+// It lets older browser caches safely move to the current Bangladesh menu.
+export const MENU_DATA_VERSION = 2;
+
+// Bangladesh-focused menu categories. IDs are stable because menu items reference them.
 export const categories = [
-  { id: 'rice', name: 'Rice & Biryani', icon: 'Utensils' },
-  { id: 'beef-mutton', name: 'Beef & Mutton', icon: 'Beef' },
-  { id: 'chicken', name: 'Chicken', icon: 'Drumstick' },
-  { id: 'fish', name: 'Fish', icon: 'Fish' },
-  { id: 'vegetarian', name: 'Vegetarian', icon: 'Leaf' },
-  { id: 'bread', name: 'Roti & Paratha', icon: 'Croissant' },
-  { id: 'snacks', name: 'Snacks & Street Food', icon: 'Candy' },
-  { id: 'desserts', name: 'Sweets & Desserts', icon: 'Cake' },
-  { id: 'drinks', name: 'Drinks & Beverages', icon: 'Coffee' },
+  { id: 'rice', name: 'Biryani & Rice', icon: 'Utensils' },
+  { id: 'beef-mutton', name: 'Beef, Mutton & Bhuna', icon: 'Beef' },
+  { id: 'chicken', name: 'Chicken & Kabab', icon: 'Drumstick' },
+  { id: 'fish', name: 'Fish & Seafood', icon: 'Fish' },
+  { id: 'vegetarian', name: 'Bhorta, Dal & Vegetables', icon: 'Leaf' },
+  { id: 'bread', name: 'Roti, Paratha & Naan', icon: 'Croissant' },
+  { id: 'snacks', name: 'Street Food & Snacks', icon: 'Candy' },
+  { id: 'desserts', name: 'Mishti & Desserts', icon: 'Cake' },
+  { id: 'drinks', name: 'Tea, Lassi & Drinks', icon: 'Coffee' },
 ];
 
 // Modifier options available for items
