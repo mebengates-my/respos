@@ -69,6 +69,45 @@ Slug rules: lowercased store name with non-alphanumerics collapsed to `-`
 suffix; reserved words (`api`, `admin`, …) are rejected. Existing stores are
 backfilled with a slug when the schema is re-run.
 
+## Removing a store (end of life)
+
+`delete_store(store_id, confirm_name)` removes a tenant completely. It is
+callable by the store's own admin, or by the SaaS operator from the SQL
+editor / with the service-role key — never by anonymous users or members of
+other stores.
+
+1. Find the store: `select id, name, slug from stores;`
+2. Delete it, confirming the exact name so the wrong id can't be nuked:
+
+```sql
+select public.delete_store(
+  '00000000-0000-0000-0000-000000000000'::uuid,   -- the store id
+  'My Café'                                        -- must match the name exactly
+);
+```
+
+Or the same call over the API with the service-role key:
+
+```bash
+curl -X POST 'https://<ref>.supabase.co/rest/v1/rpc/delete_store' \
+  -H "apikey: <SERVICE_ROLE_KEY>" \
+  -H "Authorization: Bearer <SERVICE_ROLE_KEY>" \
+  -H "Content-Type: application/json" \
+  -d '{"p_store_id":"<uuid>","p_confirm_name":"My Café"}'
+```
+
+What gets removed:
+
+| Removed with the store row (cascade)            | Also deleted                          |
+|--------------------------------------------------|---------------------------------------|
+| `store_members` rows (this store's memberships)  | Auth accounts of members whose **only** store this was |
+| menu categories + items, dining tables           | Their `profiles`, identities, sessions (cascade) |
+| orders, expense categories, expenses             | Members of other stores keep their accounts — they just lose this membership |
+
+Anyone signed in on a device at deletion time simply gets a signed-out
+session on their next request (their auth user no longer exists). The store
+link (`/slug`) immediately stops resolving to a login page.
+
 ## Realtime (live open orders)
 
 `orders`, `dining_tables` and `expenses` are added to the `supabase_realtime`

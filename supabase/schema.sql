@@ -344,6 +344,84 @@ grant execute on function public.store_roster(text) to anon, authenticated;
 grant execute on function public.verify_pin(text, uuid, text) to anon, authenticated;
 
 -- ============================================================
+-- Store deletion: remove a tenant and everything it owns.
+--
+-- WHO can call it:
+--   • the store's own admin (signed-in, via RPC) — for a future
+--     "danger zone" in the app's settings screen;
+--   • the SaaS operator: the SQL editor (postgres role) or a
+--     service-role API call. NOT callable by anon or anyone
+--     outside the store.
+--
+-- WHAT it deletes:
+--   • the store row → cascades: memberships, menu categories and
+--     items, dining tables, orders, expense categories, expenses;
+--   • every member's AUTH account whose ONLY membership was this
+--     store (so they can no longer sign in anywhere — their
+--     profile, identities and sessions cascade away too). People
+--     who also belong to another store keep their account and
+--     merely lose this membership.
+--
+-- SAFETY: pass the exact store name as p_confirm_name — a mismatch
+-- aborts. Cheap insurance against pasting the wrong store id.
+-- ============================================================
+create or replace function public.delete_store(p_store_id uuid, p_confirm_name text default null)
+returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare
+  store_name text;
+  orphan_profiles uuid[];
+begin
+  select name into store_name from public.stores where id = p_store_id;
+  if store_name is null then
+    return jsonb_build_object('deleted', false, 'reason', 'not_found');
+  end if;
+
+  -- Authorization: signed-in callers must be the store's admin; anonymous
+  -- callers are only allowed when running as the operator (SQL editor /
+  -- service role). Everything else is rejected.
+  if auth.uid() is not null then
+    if not public.is_store_admin(p_store_id) then
+      raise exception 'Only the store admin can delete this store';
+    end if;
+  elsif current_user not in ('postgres', 'supabase_admin', 'service_role') then
+    raise exception 'Not allowed';
+  end if;
+
+  -- Optional exact-name confirmation.
+  if p_confirm_name is not null and p_confirm_name <> store_name then
+    raise exception 'Confirmation name does not match the store name';
+  end if;
+
+  -- Members that belong ONLY to this store — their accounts go with it.
+  select coalesce(array_agg(m.profile_id), '{}') into orphan_profiles
+  from public.store_members m
+  where m.store_id = p_store_id
+    and not exists (
+      select 1 from public.store_members other
+      where other.profile_id = m.profile_id
+        and other.store_id <> p_store_id
+    );
+
+  -- Delete the tenant. ON DELETE CASCADE removes memberships, menu,
+  -- dining tables, orders and expenses.
+  delete from public.stores where id = p_store_id;
+
+  -- Delete the now-orphaned auth accounts (profiles cascade along).
+  delete from auth.users where id = any(orphan_profiles);
+
+  return jsonb_build_object(
+    'deleted', true,
+    'store', store_name,
+    'removed_accounts', coalesce(array_length(orphan_profiles, 1), 0)
+  );
+end;
+$$;
+
+revoke execute on function public.delete_store(uuid, text) from public, anon;
+grant execute on function public.delete_store(uuid, text) to authenticated, service_role;
+
+-- ============================================================
 -- Row Level Security
 -- ============================================================
 alter table public.stores enable row level security;
