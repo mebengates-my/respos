@@ -53,18 +53,19 @@ export default function Header() {
   };
   
   return (
-    <header className="bg-espresso text-white px-4 py-3 flex items-center justify-between shadow-lg">
-      <div className="flex items-center gap-3">
-        <div className="bg-accent p-2 rounded-lg">
-          <Coffee className="w-6 h-6" />
+    <header className="bg-espresso text-white px-2 sm:px-4 py-2 sm:py-3 flex items-center justify-between gap-1 sm:gap-3 shadow-lg">
+      {/* Brand: icon always, wordmark only once there is room for it */}
+      <div className="flex items-center gap-2 sm:gap-3 shrink-0">
+        <div className="bg-accent p-1.5 sm:p-2 rounded-lg shrink-0">
+          <Coffee className="w-5 h-5 sm:w-6 sm:h-6" />
         </div>
-        <div>
-          <h1 className="font-display text-lg font-semibold tracking-wide">{t('appName', language)}</h1>
-          <p className="text-xs text-latte">{t(currentUser?.role, language)}</p>
+        <div className="hidden sm:block min-w-0">
+          <h1 className="font-display text-lg font-semibold tracking-wide truncate">{t('appName', language)}</h1>
+          <p className="text-xs text-latte truncate">{t(currentUser?.role, language)}</p>
         </div>
       </div>
       
-      <nav className="flex items-center gap-2">
+      <nav className="flex items-center gap-0.5 sm:gap-2 min-w-0">
         <NavButton
           icon={<LayoutGrid className="w-4 h-4" />}
           label={t('pos', language)}
@@ -105,9 +106,9 @@ export default function Header() {
         )}
       </nav>
       
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-1 sm:gap-3 shrink-0">
         {/* Offline indicator */}
-        <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-sm ${
+        <div className={`flex items-center gap-2 px-2 sm:px-3 py-1.5 rounded-full text-sm ${
           isOffline ? 'bg-error/20 text-error' : 'bg-success/20 text-success'
         }`}>
           {isOffline ? (
@@ -126,15 +127,15 @@ export default function Header() {
         {/* Language Toggle */}
         <button
           onClick={() => actions.setLanguage(language === 'en' ? 'bn' : 'en')}
-          className="flex items-center gap-2 px-3 py-1.5 bg-latte/30 rounded-lg hover:bg-latte/50 transition-colors"
+          className="hidden sm:flex items-center gap-2 px-3 py-1.5 bg-latte/30 rounded-lg hover:bg-latte/50 transition-colors"
         >
           <Globe className="w-4 h-4" />
           <span className="text-sm font-medium">{language === 'en' ? 'EN' : 'বাং'}</span>
         </button>
         
         {/* User indicator */}
-        <div className="flex items-center gap-2 px-3 py-1.5 bg-latte/30 rounded-lg">
-          <div className={`w-8 h-8 ${isAdmin ? 'bg-accent' : isManager ? 'bg-medium-roast' : 'bg-success'} rounded-lg flex items-center justify-center`}>
+        <div className="flex items-center gap-2 px-1.5 sm:px-3 py-1.5 bg-latte/30 rounded-lg">
+          <div className={`w-7 h-7 sm:w-8 sm:h-8 shrink-0 ${isAdmin ? 'bg-accent' : isManager ? 'bg-medium-roast' : 'bg-success'} rounded-lg flex items-center justify-center`} title={`${currentUser?.name} · ${t(currentUser?.role, language)}`}>
             <User className="w-4 h-4" />
           </div>
           <div className="hidden md:block">
@@ -161,7 +162,7 @@ function NavButton({ icon, label, active, onClick, badge }) {
   return (
     <button
       onClick={onClick}
-      className={`relative flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all touch-persist btn-press ${
+      className={`relative flex items-center gap-2 px-2.5 sm:px-4 py-2 rounded-lg font-medium transition-all touch-persist btn-press shrink-0 ${
         active
           ? 'bg-accent text-white shadow-lg'
           : 'bg-transparent hover:bg-latte/30 text-latte hover:text-white'
