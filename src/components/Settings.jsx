@@ -1,5 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
+import { cloudAuth } from '../services/cloud';
+import { navigate } from '../utils/router';
 import {
   ArrowLeft,
   Coffee,
@@ -9,14 +11,32 @@ import {
   Bell,
   Trash2,
   RefreshCw,
-  AlertTriangle
+  AlertTriangle,
+  Loader2
 } from 'lucide-react';
 import { motion } from 'framer-motion';
 
 export default function Settings() {
   const { state, actions } = useApp();
   const [showClearConfirm, setShowClearConfirm] = useState(false);
-  
+  const [showDeleteStore, setShowDeleteStore] = useState(false);
+
+  // Store deletion (Danger Zone) is a cloud-only, admin-only action.
+  const cloudAdmin = Boolean(state.currentUser?.cloud && state.currentUser?.role === 'admin');
+  const storeId = state.currentUser?.storeId || null;
+  const storeSlug = state.currentUser?.storeSlug || null;
+
+  const handleStoreDeleted = (result) => {
+    setShowDeleteStore(false);
+    actions.addToast(
+      `Store deleted (${result?.removedAccounts ?? 0} staff account(s) removed)`,
+      'success'
+    );
+    // The store — and possibly this very account — no longer exists.
+    actions.logout();
+    navigate('/');
+  };
+
   const handleClearData = () => {
     localStorage.clear();
     window.location.reload();
@@ -129,6 +149,30 @@ export default function Settings() {
             </div>
           </SettingsSection>
           
+          {/* Danger Zone — delete the whole store (cloud admin only) */}
+          {cloudAdmin && storeId && (
+            <div className="bg-white rounded-2xl shadow-sm overflow-hidden border border-error/20">
+              <div className="bg-error/10 px-6 py-4 flex items-center gap-3">
+                <AlertTriangle className="w-5 h-5 text-error" />
+                <h2 className="font-semibold text-dark-roast">Danger Zone</h2>
+              </div>
+              <div className="p-6">
+                <p className="text-sm text-medium-roast mb-4 leading-relaxed">
+                  Permanently delete this store: menu, tables, orders, expenses, the staff
+                  sign-in link, and the accounts of staff who belong only to this store.
+                  Everyone else keeps their account. This cannot be undone.
+                </p>
+                <button
+                  onClick={() => setShowDeleteStore(true)}
+                  className="flex items-center gap-2 px-4 py-2.5 bg-error text-white rounded-xl font-medium hover:bg-error/90 transition-colors"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  Delete this store…
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* About */}
           <SettingsSection title="About" icon={<Coffee className="w-5 h-5" />}>
             <SettingRow label="App Version" value="1.0.0" />
@@ -136,7 +180,17 @@ export default function Settings() {
           </SettingsSection>
         </div>
       </div>
-      
+
+      {/* Delete Store Modal (cloud admin only) */}
+      {showDeleteStore && (
+        <DeleteStoreModal
+          storeId={storeId}
+          storeSlug={storeSlug}
+          onClose={() => setShowDeleteStore(false)}
+          onDeleted={handleStoreDeleted}
+        />
+      )}
+
       {/* Clear Confirmation Modal */}
       {showClearConfirm && (
         <motion.div
@@ -183,6 +237,138 @@ export default function Settings() {
         </motion.div>
       )}
     </div>
+  );
+}
+
+// Confirmation modal for deleting the whole store. The admin must type the
+// store's link slug (or its exact name) — the same guard the database
+// function delete_store() enforces server-side.
+function DeleteStoreModal({ storeId, storeSlug, onClose, onDeleted }) {
+  const [store, setStore] = useState(null); // { name, slug } once loaded
+  const [loaded, setLoaded] = useState(!storeSlug); // nothing to fetch without a slug
+  const [confirmText, setConfirmText] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    if (!storeSlug) return;
+    let cancelled = false;
+    cloudAuth.getStoreBySlug(storeSlug).then(({ data }) => {
+      if (!cancelled) {
+        setStore(data || null);
+        setLoaded(true);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [storeSlug]);
+
+  const token = store?.slug || '';
+  const name = store?.name || '';
+  const matches = confirmText && ((token && confirmText === token) || (name && confirmText === name));
+
+  const handleDelete = async () => {
+    setBusy(true);
+    setError('');
+    const { data, error: err } = await cloudAuth.deleteStore({
+      storeId,
+      confirmName: confirmText,
+    });
+    setBusy(false);
+    if (err) {
+      setError(err.message || 'Delete failed');
+      return;
+    }
+    if (!data?.deleted) {
+      setError('Store not found — it may already be deleted.');
+      return;
+    }
+    onDeleted(data);
+  };
+
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+      onClick={() => !busy && onClose()}
+    >
+      <motion.div
+        initial={{ scale: 0.95, opacity: 0 }}
+        animate={{ scale: 1, opacity: 1 }}
+        className="bg-white rounded-2xl p-6 max-w-sm w-full shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center gap-3 mb-4">
+          <div className="w-12 h-12 bg-error/10 rounded-full flex items-center justify-center">
+            <AlertTriangle className="w-6 h-6 text-error" />
+          </div>
+          <div>
+            <h3 className="font-semibold text-dark-roast">Delete this store?</h3>
+            <p className="text-sm text-medium-roast">This action cannot be undone</p>
+          </div>
+        </div>
+
+        {loaded ? (
+          <>
+            <p className="text-sm text-medium-roast mb-4 leading-relaxed">
+              {store
+                ? `“${store.name}” and all of its data will be permanently deleted, along with the accounts of staff who belong only to this store.`
+                : 'The store and all of its data will be permanently deleted, along with the accounts of staff who belong only to this store.'}
+            </p>
+            <label className="block text-sm font-medium text-medium-roast mb-2">
+              Type the store link to confirm
+              {token ? (
+                <span className="font-mono text-dark-roast"> ({token})</span>
+              ) : name ? (
+                <span className="font-semibold text-dark-roast"> ({name})</span>
+              ) : null}
+            </label>
+            <input
+              type="text"
+              value={confirmText}
+              onChange={(e) => setConfirmText(e.target.value)}
+              placeholder={token || name || 'store name'}
+              disabled={busy}
+              autoComplete="off"
+              className="w-full px-4 py-3 bg-cream border border-latte/30 rounded-xl focus:outline-none focus:ring-2 focus:ring-error/40 text-dark-roast mb-4"
+            />
+            {error && (
+              <p className="text-sm text-error bg-error/5 rounded-xl px-3 py-2 mb-4">{error}</p>
+            )}
+            <div className="flex gap-3">
+              <button
+                onClick={onClose}
+                disabled={busy}
+                className="flex-1 py-3 bg-latte/10 text-espresso rounded-xl font-medium hover:bg-latte/20 transition-colors btn-press disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleDelete}
+                disabled={!matches || busy}
+                className="flex-1 py-3 bg-error text-white rounded-xl font-medium hover:bg-error/90 transition-colors btn-press disabled:opacity-40 flex items-center justify-center gap-2"
+              >
+                {busy ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Deleting…
+                  </>
+                ) : (
+                  'Delete Store'
+                )}
+              </button>
+            </div>
+          </>
+        ) : (
+          <div className="py-8 flex flex-col items-center gap-3">
+            <Loader2 className="w-6 h-6 text-error animate-spin" />
+            <p className="text-sm text-medium-roast">Loading store…</p>
+          </div>
+        )}
+      </motion.div>
+    </motion.div>
   );
 }
 

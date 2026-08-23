@@ -15,7 +15,11 @@ import {
   Building2,
   Loader2,
   ShieldCheck,
-  Cloud
+  Cloud,
+  Link2,
+  Copy,
+  Check,
+  PartyPopper
 } from 'lucide-react';
 import { motion } from 'framer-motion';
 
@@ -26,6 +30,7 @@ const PHASES = {
   SIGNUP: 'signup',
   CREATE_FIRST_STORE: 'create_first_store',
   SELECT_STORE: 'select_store',
+  STORE_CREATED: 'store_created',
 };
 
 export default function Onboarding({ onBack }) {
@@ -45,6 +50,10 @@ export default function Onboarding({ onBack }) {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [displayName, setDisplayName] = useState('');
   const [storeName, setStoreName] = useState('');
+
+  // ---- Store-created confirmation (shows the shareable staff link) ----
+  const [createdStore, setCreatedStore] = useState(null); // { name, slug, membership }
+  const [copied, setCopied] = useState(false);
 
   const changeLanguage = (lang) => {
     actions.setLanguage(lang);
@@ -152,8 +161,10 @@ export default function Onboarding({ onBack }) {
         setBusy(false);
         return;
       }
-      const membership = { id: storeData.store.id, role: 'admin', displayName };
-      enterStore(userData.user, membership);
+      const membership = { id: storeData.store.id, role: 'admin', displayName, slug: storeData.store.slug };
+      setCloudUser(userData.user);
+      setCreatedStore({ name: storeName, slug: storeData.store.slug, membership });
+      setPhase(PHASES.STORE_CREATED);
     } catch {
       setError(t('error', language));
       setBusy(false);
@@ -182,8 +193,10 @@ export default function Onboarding({ onBack }) {
         id: storeData.store.id,
         role: 'admin',
         displayName: cloudUser?.displayName || '',
+        slug: storeData.store.slug,
       };
-      enterStore(cloudUser, membership);
+      setCreatedStore({ name: storeName, slug: storeData.store.slug, membership });
+      setPhase(PHASES.STORE_CREATED);
     } catch {
       setError(t('error', language));
       setBusy(false);
@@ -486,6 +499,63 @@ export default function Onboarding({ onBack }) {
                 )}
               </button>
             </form>
+          )}
+
+          {/* Store created — show the shareable staff link */}
+          {phase === PHASES.STORE_CREATED && createdStore && (
+            <div className="p-8 space-y-5">
+              <div className="text-center mb-2">
+                <div className="inline-flex items-center justify-center w-14 h-14 bg-success/10 text-success rounded-2xl mb-3">
+                  <PartyPopper className="w-7 h-7" />
+                </div>
+                <h2 className="text-2xl font-display font-bold text-dark-roast">
+                  {t('storeCreatedTitle', language)}
+                </h2>
+                <p className="text-sm text-medium-roast mt-1 font-medium">{createdStore.name}</p>
+              </div>
+
+              <div className="bg-cream border border-latte/30 rounded-2xl p-4">
+                <div className="flex items-center gap-2 text-sm font-medium text-medium-roast mb-2">
+                  <Link2 className="w-4 h-4" />
+                  {t('yourStoreLink', language)}
+                </div>
+                <div className="flex items-center gap-2">
+                  <code className="flex-1 px-3 py-2 bg-white border border-latte/30 rounded-lg text-sm text-dark-roast truncate">
+                    {`${window.location.origin}/${createdStore.slug}`}
+                  </code>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      const link = `${window.location.origin}/${createdStore.slug}`;
+                      try {
+                        await navigator.clipboard.writeText(link);
+                      } catch {
+                        // Clipboard may be blocked (insecure context) — the
+                        // link stays visible to copy manually.
+                      }
+                      setCopied(true);
+                      setTimeout(() => setCopied(false), 2000);
+                    }}
+                    className="flex items-center gap-2 px-3 py-2 bg-espresso text-white rounded-lg text-sm font-medium hover:bg-espresso/90 transition-colors shrink-0"
+                  >
+                    {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                    {copied ? t('copied', language) : t('copy', language)}
+                  </button>
+                </div>
+                <p className="text-xs text-medium-roast mt-3 leading-relaxed">
+                  {t('staffLinkHint', language)}
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => enterStore(cloudUser, createdStore.membership)}
+                className="w-full flex items-center justify-center gap-2 py-3.5 bg-accent text-white rounded-xl font-semibold hover:bg-accent/90 transition-colors btn-press"
+              >
+                {t('continueToStore', language)}
+                <ArrowRight className="w-5 h-5" />
+              </button>
+            </div>
           )}
 
           {/* Store selection */}

@@ -12,7 +12,7 @@
 // UI changes — just the two env vars.
 // ============================================================
 
-import { saveToStorage, loadFromStorage } from '../utils/helpers';
+import { saveToStorage, loadFromStorage } from '../utils/helpers.js';
 
 export const MOCK_STORAGE_KEY = 'cafe-pos-cloud-mock';
 export const MOCK_SESSION_KEY = 'cafe-pos-cloud-mock-session';
@@ -24,6 +24,31 @@ const uid = () =>
 
 const DEFAULT_CURRENCY = 'RM';
 const DEFAULT_TAX_RATE = 0.06;
+
+// Same slug rules as the SQL unique_store_slug(): lowercase, a-z0-9 and '-'.
+export function mockSlugify(name) {
+  const base = String(name || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return base || 'store';
+}
+
+function uniqueStoreSlug(db, name) {
+  let base = mockSlugify(name);
+  if (['api', 'assets', 'docs', 'admin', 'login', 'settings', 'pos', 'tables', 'reports', 'index', 'sw'].includes(base)) {
+    base = `${base}-store`;
+  }
+  let candidate = base;
+  let n = 2;
+  const taken = (slug) => db.stores.some((s) => (s.slug || mockSlugify(s.name)) === slug);
+  while (taken(candidate)) {
+    candidate = `${base}-${n}`;
+    n += 1;
+  }
+  return candidate;
+}
+
 
 function emptyDb() {
   return { users: [], profiles: [], stores: [], memberships: [] };
@@ -131,6 +156,7 @@ export async function mockRegisterStore({ storeName, displayName }) {
   const store = {
     id: uid(),
     name: String(storeName || '').trim() || 'My Café',
+    slug: uniqueStoreSlug(db, storeName),
     currency: DEFAULT_CURRENCY,
     taxRate: DEFAULT_TAX_RATE,
     settings: {},
@@ -148,7 +174,7 @@ export async function mockRegisterStore({ storeName, displayName }) {
     createdAt: Date.now(),
   });
   saveDb(db);
-  return { data: { store: { id: store.id, name: store.name } }, error: null };
+  return { data: { store: { id: store.id, name: store.name, slug: store.slug } }, error: null };
 }
 
 // List the stores the signed-in user is an active member of, including the
@@ -167,6 +193,7 @@ export async function mockListMyStores() {
         ? {
             id: store.id,
             name: store.name,
+            slug: store.slug || mockSlugify(store.name),
             currency: store.currency,
             taxRate: store.taxRate,
             role: m.role,
@@ -177,6 +204,102 @@ export async function mockListMyStores() {
     .filter(Boolean);
 
   return { data: stores, error: null };
+}
+
+// ---------- Public store-link + PIN login (mock of the anon RPCs) ----------
+
+function findStoreBySlug(db, slug) {
+  const want = String(slug || '').trim().toLowerCase();
+  return (
+    db.stores.find((s) => (s.slug || '').toLowerCase() === want) ||
+    db.stores.find((s) => mockSlugify(s.name) === want) ||
+    null
+  );
+}
+
+// Resolve a store link to its public info (id/name/slug).
+export async function mockGetStoreBySlug(slug) {
+  await delay();
+  const db = loadDb();
+  const store = findStoreBySlug(db, slug);
+  if (!store) return { data: null, error: null };
+  return {
+    data: { id: store.id, name: store.name, slug: store.slug || mockSlugify(store.name) },
+    error: null,
+  };
+}
+
+// Active staff of a store that actually have a PIN (the owner, who signs in
+// with email/password, has no PIN and is not listed).
+export async function mockGetStoreRoster(slug) {
+  await delay();
+  const db = loadDb();
+  const store = findStoreBySlug(db, slug);
+  if (!store) return { data: [], error: null };
+  const roleOrder = { admin: 1, manager: 2, server: 3 };
+  const roster = db.memberships
+    .filter((m) => m.storeId === store.id && m.active !== false && m.pin)
+    .map((m) => ({ id: m.profileId, name: m.displayName || '', role: m.role }))
+    .sort((a, b) => (roleOrder[a.role] || 9) - (roleOrder[b.role] || 9) || a.name.localeCompare(b.name));
+  return { data: roster, error: null };
+}
+
+// Verify a staff PIN and, on success, sign the mock auth user in and return
+// { user, membership } — the same shape the real pinLogin() produces.
+// Mirrors the SQL lockout: 5 wrong attempts → 5 minute lock.
+export async function mockPinLogin({ slug, profileId, pin }) {
+  await delay();
+  const db = loadDb();
+  const store = findStoreBySlug(db, slug);
+  if (!store) {
+    return { data: null, error: { message: 'Store not found', reason: 'not_found' } };
+  }
+  const membership = db.memberships.find(
+    (m) => m.storeId === store.id && m.profileId === profileId && m.active !== false
+  );
+  if (!membership) {
+    return { data: null, error: { message: 'Member not found', reason: 'not_found' } };
+  }
+  if (membership.lockedUntil && membership.lockedUntil > Date.now()) {
+    return { data: null, error: { message: 'Account locked', reason: 'locked' } };
+  }
+
+  if (membership.pin === pin) {
+    membership.failedAttempts = 0;
+    membership.lockedUntil = null;
+    saveDb(db);
+    const user = findUser(db, profileId);
+    if (!user || user.password !== pin) {
+      return { data: null, error: { message: 'Invalid PIN', reason: 'invalid' } };
+    }
+    saveToStorage(MOCK_SESSION_KEY, { userId: user.id, signedInAt: Date.now() });
+    return {
+      data: {
+        user: toAppUser(user),
+        membership: {
+          id: store.id,
+          name: store.name,
+          slug: store.slug || mockSlugify(store.name),
+          role: membership.role,
+          displayName: membership.displayName || '',
+        },
+      },
+      error: null,
+    };
+  }
+
+  membership.failedAttempts = (membership.failedAttempts || 0) + 1;
+  let locked = false;
+  if (membership.failedAttempts >= 5) {
+    membership.lockedUntil = Date.now() + 5 * 60 * 1000;
+    membership.failedAttempts = 0;
+    locked = true;
+  }
+  saveDb(db);
+  return {
+    data: null,
+    error: { message: locked ? 'Account locked' : 'Invalid PIN', reason: locked ? 'locked' : 'invalid' },
+  };
 }
 
 // Provision a staff member (mock of the Vercel service-role route). In real
@@ -281,8 +404,7 @@ export async function mockUpdateStoreMember({ storeId, profileId, displayName, r
 }
 
 // Remove a member: drop the membership and the underlying (mock) auth user.
-export async function mockRemoveStoreMember({ storeId, profileId }) {
-  await delay();
+export async function mockRemoveStoreMember({ storeId, profileId }) {  await delay();
   const db = loadDb();
   const index = db.memberships.findIndex(
     (m) => m.storeId === storeId && m.profileId === profileId
@@ -295,4 +417,46 @@ export async function mockRemoveStoreMember({ storeId, profileId }) {
   db.profiles = db.profiles.filter((p) => p.id !== profileId);
   saveDb(db);
   return { data: { ok: true }, error: null };
+}
+
+// Delete a store (tenant) and everything it owns — the in-browser equivalent
+// of the SQL `delete_store()`. Members whose ONLY membership was this store
+// lose their auth account; shared members keep theirs. The confirmation must
+// match the store name or its link slug.
+export async function mockDeleteStore({ storeId, confirmName }) {
+  await delay();
+  const db = loadDb();
+  const store = db.stores.find((s) => s.id === storeId);
+  if (!store) {
+    return { data: { deleted: false, reason: 'not_found' }, error: null };
+  }
+  const slug = store.slug || mockSlugify(store.name);
+  if (confirmName != null && confirmName !== store.name && confirmName !== slug) {
+    return {
+      data: null,
+      error: { message: 'Confirmation does not match the store name or link' },
+    };
+  }
+
+  const storeMembers = db.memberships.filter((m) => m.storeId === storeId);
+  const orphanIds = storeMembers
+    .filter((m) => !db.memberships.some((o) => o.profileId === m.profileId && o.storeId !== storeId))
+    .map((m) => m.profileId);
+
+  db.stores = db.stores.filter((s) => s.id !== storeId);
+  db.memberships = db.memberships.filter((m) => m.storeId !== storeId);
+  db.users = db.users.filter((u) => !orphanIds.includes(u.id));
+  db.profiles = db.profiles.filter((p) => !orphanIds.includes(p.id));
+  saveDb(db);
+
+  // If the operator just deleted the store they were signed in to, sign out.
+  const sessionId = currentSessionId();
+  if (sessionId && orphanIds.includes(sessionId)) {
+    saveToStorage(MOCK_SESSION_KEY, null);
+  }
+
+  return {
+    data: { deleted: true, store: store.name, removedAccounts: orphanIds.length },
+    error: null,
+  };
 }

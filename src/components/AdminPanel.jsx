@@ -38,6 +38,8 @@ import {
   ShoppingCart,
   Wallet,
   Tags,
+  Link2,
+  Copy,
   TrendingDown,
   CalendarDays,
   Upload,
@@ -389,6 +391,23 @@ function UsersView({ language, state, actions, cloudMembers, cloudMembersLoading
   const [editingUser, setEditingUser] = useState(null);
   const [formData, setFormData] = useState({ name: '', role: 'server', pin: '' });
   const [saving, setSaving] = useState(false);
+  const [linkCopied, setLinkCopied] = useState(false);
+
+  // The store's public PIN-login link (…/mycafe) — what the team bookmarks.
+  const staffLink = isCloud && state.currentUser?.storeSlug
+    ? `${window.location.origin}/${state.currentUser.storeSlug}`
+    : null;
+
+  const copyStaffLink = async () => {
+    if (!staffLink) return;
+    try {
+      await navigator.clipboard.writeText(staffLink);
+    } catch {
+      // Clipboard may be blocked — the link text stays selectable below.
+    }
+    setLinkCopied(true);
+    setTimeout(() => setLinkCopied(false), 2000);
+  };
 
   const openAdd = () => {
     setEditingUser(null);
@@ -479,6 +498,23 @@ function UsersView({ language, state, actions, cloudMembers, cloudMembersLoading
         <h1 className="text-2xl font-display font-bold text-dark-roast">{t('userManagement', language)}</h1>
         <button onClick={openAdd} className="flex items-center gap-2 px-4 py-2 bg-accent text-white rounded-xl"><Plus className="w-5 h-5" /> {t('addUser', language)}</button>
       </div>
+
+      {staffLink && (
+        <div className="mb-6 bg-accent/5 border border-accent/20 rounded-2xl p-4 flex items-start sm:items-center gap-3 flex-col sm:flex-row">
+          <div className="w-10 h-10 bg-accent/10 text-accent rounded-xl flex items-center justify-center shrink-0">
+            <Link2 className="w-5 h-5" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="font-semibold text-dark-roast">{t('staffSignInLink', language)}</p>
+            <p className="text-sm text-medium-roast mb-2">{t('staffSignInLinkHint', language)}</p>
+            <code className="inline-block px-3 py-1.5 bg-white border border-latte/30 rounded-lg text-sm text-dark-roast select-all">{staffLink}</code>
+          </div>
+          <button onClick={copyStaffLink} className="flex items-center gap-2 px-4 py-2 bg-espresso text-white rounded-xl text-sm font-medium hover:bg-espresso/90 transition-colors shrink-0">
+            {linkCopied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+            {linkCopied ? t('copied', language) : t('copy', language)}
+          </button>
+        </div>
+      )}
       <div className="bg-white rounded-2xl shadow-sm overflow-hidden">
         <table className="w-full">
           <thead className="bg-cream"><tr><th className="px-6 py-4 text-left text-sm font-semibold">{t('userName', language)}</th><th className="px-6 py-4 text-left text-sm font-semibold">{t('userRole', language)}</th><th className="px-6 py-4 text-left text-sm font-semibold">{isCloud ? t('email', language) : t('userPin', language)}</th><th className="px-6 py-4 text-right text-sm font-semibold">Actions</th></tr></thead>

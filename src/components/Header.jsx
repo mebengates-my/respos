@@ -2,6 +2,7 @@ import React from 'react';
 import { useApp } from '../context/AppContext';
 import { t } from '../data/language';
 import { useConfirm } from './ConfirmDialog';
+import { navigate } from '../utils/router';
 import {
   Coffee,
   Wifi,
@@ -34,7 +35,15 @@ export default function Header() {
       danger: true,
     });
     if (ok) {
+      // Cloud sessions land back on the store's PIN screen (…/mycafe) so the
+      // next staff member can sign in immediately; local mode stays at home.
+      const slug = currentUser?.cloud ? currentUser.storeSlug : null;
       actions.logout();
+      if (slug) {
+        navigate(`/${slug}`);
+      } else if (window.location.pathname !== '/') {
+        navigate('/');
+      }
     }
   };
   

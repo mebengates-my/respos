@@ -3,6 +3,7 @@ import { useApp } from '../context/AppContext';
 import { t } from '../data/language';
 import Onboarding from './Onboarding';
 import { isCloudEnabled } from '../services/cloud';
+import { navigate, parseStoreSlug } from '../utils/router';
 import {
   Coffee,
   User,
@@ -12,7 +13,8 @@ import {
   ArrowRight,
   AlertCircle,
   Globe,
-  Store
+  Store,
+  Search,
 } from 'lucide-react';
 import { motion } from 'framer-motion';
 
@@ -24,6 +26,8 @@ export default function Login() {
   const [pin, setPin] = useState('');
   const [error, setError] = useState('');
   const [showLangMenu, setShowLangMenu] = useState(false);
+  const [storeLink, setStoreLink] = useState('');
+  const [linkError, setLinkError] = useState(false);
 
   // Cloud/owner login (Supabase or the in-browser mock) is a separate full
   // screen so it does not disturb the existing staff PIN flow.
@@ -63,6 +67,18 @@ export default function Login() {
   // customers and their staff all enter through the store login screen instead.
   const showCloudLanding = isCloudEnabled && loginMode === 'staff';
   const currentYear = new Date().getFullYear();
+
+  // Staff flow on the home page: type the store name/link and go to that
+  // store's PIN screen (…/mycafe).
+  const handleOpenStore = (e) => {
+    e.preventDefault();
+    const slug = parseStoreSlug(storeLink);
+    if (slug) {
+      navigate(`/${slug}`);
+    } else {
+      setLinkError(true);
+    }
+  };
   
   // One section per role, in order of responsibility.
   const roleSections = [
@@ -142,14 +158,51 @@ export default function Login() {
           className="bg-white rounded-3xl shadow-2xl overflow-hidden"
         >
           {showCloudLanding ? (
-            /* Cloud deployment landing: everyone (owner + staff) enters via the store login */
+            /* Cloud deployment landing: staff open their store's link and sign
+               in with a PIN; owners use the email sign-in below. */
             <div className="p-8">
+              <form onSubmit={handleOpenStore} className="space-y-3">
+                <label className="block text-sm font-medium text-medium-roast" htmlFor="store-link">
+                  {t('openYourStore', language)}
+                </label>
+                <div className="relative">
+                  <span className="absolute left-4 top-1/2 -translate-y-1/2 text-latte">
+                    <Search className="w-5 h-5" />
+                  </span>
+                  <input
+                    id="store-link"
+                    type="text"
+                    value={storeLink}
+                    onChange={(e) => {
+                      setStoreLink(e.target.value);
+                      setLinkError(false);
+                    }}
+                    placeholder={t('enterStoreLinkHint', language)}
+                    autoComplete="off"
+                    className={`w-full pl-12 pr-4 py-3 bg-cream border rounded-xl focus:outline-none focus:ring-2 focus:ring-accent/40 text-dark-roast ${
+                      linkError ? 'border-error' : 'border-latte/30'
+                    }`}
+                  />
+                </div>
+                {linkError && (
+                  <p className="text-error text-sm flex items-center gap-2">
+                    <AlertCircle className="w-4 h-4" />
+                    {t('storeNotFound', language)}
+                  </p>
+                )}
+                <button
+                  type="submit"
+                  className="w-full flex items-center justify-center gap-2 px-5 py-4 bg-accent text-white rounded-xl font-semibold hover:bg-accent/90 transition-colors"
+                >
+                  <Store className="w-5 h-5" />
+                  {t('openYourStore', language)}
+                </button>
+              </form>
               <button
                 onClick={() => setLoginMode('cloud')}
-                className="w-full flex items-center justify-center gap-2 px-5 py-4 bg-accent text-white rounded-xl font-semibold hover:bg-accent/90 transition-colors"
+                className="w-full flex items-center justify-center gap-2 px-5 py-3 mt-3 bg-latte/10 text-dark-roast rounded-xl font-medium hover:bg-latte/20 transition-colors"
               >
-                <Store className="w-5 h-5" />
-                {t('storeLogin', language)}
+                {t('ownerSignIn', language)}
               </button>
               <p className="text-center text-sm text-medium-roast mt-5 leading-relaxed">
                 {t('staffSignInNote', language)}
