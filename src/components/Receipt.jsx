@@ -94,10 +94,16 @@ export const generateThermalReceiptText = (order, settings, isReprint = false) =
     lines.push(discLabel + ' '.repeat(Math.max(1, dots4)) + discVal);
   }
   
-  const taxLabel = `TAX (${(settings.taxRate * 100).toFixed(0)}%)`;
-  const taxVal = formatPriceFromCents(order.tax, settings);
-  const dots5 = width - taxLabel.length - taxVal.length;
-  lines.push(taxLabel + ' '.repeat(Math.max(1, dots5)) + taxVal);
+  // Tax is omitted from the receipt entirely when the order carries none —
+  // which is what happens for every order once tax is switched off in Store
+  // Settings. Historic taxed orders still print their tax line so the receipt
+  // keeps adding up.
+  if (order.tax > 0) {
+    const taxLabel = `TAX (${(settings.taxRate * 100).toFixed(0)}%)`;
+    const taxVal = formatPriceFromCents(order.tax, settings);
+    const dots5 = width - taxLabel.length - taxVal.length;
+    lines.push(taxLabel + ' '.repeat(Math.max(1, dots5)) + taxVal);
+  }
   
   divider();
   
@@ -275,10 +281,12 @@ export default function Receipt({ order, onClose, showPrint = true }) {
                   <span className="font-mono">-{formatPrice(order.discountAmount)}</span>
                 </div>
               )}
-              <div className="flex justify-between">
-                <span>TAX ({(settings.taxRate * 100).toFixed(0)}%)</span>
-                <span className="font-mono">{formatPrice(order.tax)}</span>
-              </div>
+              {order.tax > 0 && (
+                <div className="flex justify-between">
+                  <span>TAX ({(settings.taxRate * 100).toFixed(0)}%)</span>
+                  <span className="font-mono">{formatPrice(order.tax)}</span>
+                </div>
+              )}
               <div className="flex justify-between font-bold border-t border-dashed border-gray-400 pt-1">
                 <span>TOTAL</span>
                 <span className="font-mono">{formatPrice(order.total)}</span>

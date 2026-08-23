@@ -84,8 +84,12 @@ export function downloadSalesReportPdf({ rangeLabel, orders }) {
     ['Total Orders', String(totalOrders)],
     ['Avg Order', money(Math.round(avgOrderValue), currency)],
     ['Items Sold', String(totalItems)],
-    ['Tax Collected', money(totalTax, currency)],
   ];
+  // Only report tax when some was actually collected in the range — a store
+  // running with tax switched off should not see an empty "Tax Collected" cell.
+  if (totalTax > 0) {
+    summary.push(['Tax Collected', money(totalTax, currency)]);
+  }
 
   autoTable(doc, {
     startY: 110,

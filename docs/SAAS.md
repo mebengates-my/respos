@@ -108,10 +108,11 @@ Anyone signed in on a device at deletion time simply gets a signed-out
 session on their next request (their auth user no longer exists). The store
 link (`/slug`) immediately stops resolving to a login page.
 
-Store admins can also delete **their own** store without SQL: the app's
-Settings screen has a **Danger Zone** (cloud + admin only) that requires
-typing the store link (or exact name) — the same guard the database
-function enforces.
+Store owners can also delete **their own** store without SQL: the
+**Admin Panel → Settings → Danger Zone** card (cloud + admin only, at the
+bottom of the Store Settings page) requires typing the store link (or exact
+name) — the same guard the database function enforces. The same Danger Zone
+is available on the POS Settings screen.
 
 ## Realtime (live open orders)
 

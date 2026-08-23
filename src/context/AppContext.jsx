@@ -18,6 +18,7 @@ import {
   loadFromStorage
 } from '../utils/helpers';
 import { cloudAuth, buildAppUser, isCloudEnabled } from '../services/cloud';
+import { loadStoreSettings, STORE_SETTINGS_STORAGE_KEY } from '../data/storeSettings';
 
 const AppContext = createContext(null);
 
@@ -28,6 +29,7 @@ const ACTIONS = {
   CLOUD_LOGIN: 'CLOUD_LOGIN',
   LOGOUT: 'LOGOUT',
   SET_LANGUAGE: 'SET_LANGUAGE',
+  SET_TAX_SETTINGS: 'SET_TAX_SETTINGS',
   
   // Views
   SET_VIEW: 'SET_VIEW',
@@ -119,6 +121,10 @@ const defaultExpenseCategories = [
 ];
 
 // Initial state
+// Store settings live in their own localStorage key (see data/storeSettings.js);
+// read them once at boot so order math starts with the admin's tax configuration.
+const initialStoreSettings = loadStoreSettings();
+
 const initialState = {
   // Auth
   currentUser: null,
@@ -137,7 +143,11 @@ const initialState = {
   categories: initialCategories,
   menuItems: initialMenuItems,
   discountPresets,
-  taxRate: TAX_RATE,
+  // Tax comes from the store settings (Admin → Settings). `taxEnabled: false`
+  // switches tax off completely: orders are charged subtotal − discount only
+  // and no tax line is shown anywhere.
+  taxRate: initialStoreSettings.taxRate ?? TAX_RATE,
+  taxEnabled: initialStoreSettings.taxEnabled !== false,
   
   // Tables
   selectedTable: null,
@@ -200,6 +210,12 @@ function getPersistedState(savedState) {
   };
 }
 
+// The tax rate actually applied to an order: zero whenever the admin has
+// turned tax off in Store Settings.
+function effectiveTaxRate(state) {
+  return state.taxEnabled === false ? 0 : (state.taxRate ?? TAX_RATE);
+}
+
 // Reducer
 function appReducer(state, action) {
   switch (action.type) {
@@ -231,6 +247,27 @@ function appReducer(state, action) {
     
     case ACTIONS.SET_LANGUAGE:
       return { ...state, language: action.payload };
+
+    // Keep order math in step with Admin → Settings → Tax & Currency.
+    case ACTIONS.SET_TAX_SETTINGS: {
+      const next = {
+        ...state,
+        taxRate: Number.isFinite(action.payload?.taxRate) ? action.payload.taxRate : state.taxRate,
+        taxEnabled: action.payload?.taxEnabled !== false,
+      };
+      // Re-price the order in progress so the cart reflects the change at once.
+      if (next.currentOrder) {
+        const subtotal = next.currentOrder.subtotal || 0;
+        const discountAmount = next.currentOrder.discountAmount || 0;
+        const tax = calculateTax(subtotal - discountAmount, effectiveTaxRate(next));
+        next.currentOrder = {
+          ...next.currentOrder,
+          tax,
+          total: calculateTotal(subtotal, tax, discountAmount),
+        };
+      }
+      return next;
+    }
     
     // Views
     case ACTIONS.SET_VIEW:
@@ -496,7 +533,7 @@ function appReducer(state, action) {
       
       const subtotal = calculateSubtotal(newItems);
       const discountAmount = calculateDiscount(subtotal, state.currentOrder?.discount);
-      const tax = calculateTax(subtotal - discountAmount);
+      const tax = calculateTax(subtotal - discountAmount, effectiveTaxRate(state));
       const total = calculateTotal(subtotal, tax, discountAmount);
       
       return {
@@ -528,7 +565,7 @@ function appReducer(state, action) {
       
       const subtotal = calculateSubtotal(newItems);
       const discountAmount = calculateDiscount(subtotal, state.currentOrder?.discount);
-      const tax = calculateTax(subtotal - discountAmount);
+      const tax = calculateTax(subtotal - discountAmount, effectiveTaxRate(state));
       const total = calculateTotal(subtotal, tax, discountAmount);
       
       return {
@@ -548,7 +585,7 @@ function appReducer(state, action) {
       const newItems = state.currentOrder.items.filter(item => item.id !== action.payload);
       const subtotal = calculateSubtotal(newItems);
       const discountAmount = calculateDiscount(subtotal, state.currentOrder?.discount);
-      const tax = calculateTax(subtotal - discountAmount);
+      const tax = calculateTax(subtotal - discountAmount, effectiveTaxRate(state));
       const total = calculateTotal(subtotal, tax, discountAmount);
       
       return {
@@ -569,7 +606,7 @@ function appReducer(state, action) {
       const discount = action.payload;
       const subtotal = state.currentOrder.subtotal;
       const discountAmount = calculateDiscount(subtotal, discount);
-      const tax = calculateTax(subtotal - discountAmount);
+      const tax = calculateTax(subtotal - discountAmount, effectiveTaxRate(state));
       const total = calculateTotal(subtotal, tax, discountAmount);
       
       return {
@@ -586,7 +623,7 @@ function appReducer(state, action) {
     
     case ACTIONS.REMOVE_DISCOUNT: {
       const subtotal = state.currentOrder.subtotal;
-      const tax = calculateTax(subtotal);
+      const tax = calculateTax(subtotal, effectiveTaxRate(state));
       const total = calculateTotal(subtotal, tax, 0);
       
       return {
@@ -790,6 +827,17 @@ export function AppProvider({ children }) {
         return;
       }
 
+      // Tax configuration lives in its own key; mirror it too so a settings
+      // change on one tab re-prices the cart on the others.
+      if (event.key === STORE_SETTINGS_STORAGE_KEY) {
+        const fresh = loadStoreSettings();
+        dispatch({
+          type: ACTIONS.SET_TAX_SETTINGS,
+          payload: { taxRate: fresh.taxRate, taxEnabled: fresh.taxEnabled },
+        });
+        return;
+      }
+
       // Mirror login/logout across tabs on this device.
       if (event.key === SESSION_STORAGE_KEY) {
         try {
@@ -945,6 +993,12 @@ export function AppProvider({ children }) {
       dispatch({ type: ACTIONS.CLOUD_LOGIN, payload: { user, session } });
     }, []),
     
+    // Called after Store Settings are saved/restored so the POS immediately uses
+    // the new tax rate / on-off switch.
+    setTaxSettings: useCallback(({ taxRate, taxEnabled }) => {
+      dispatch({ type: ACTIONS.SET_TAX_SETTINGS, payload: { taxRate, taxEnabled } });
+    }, []),
+
     setLanguage: useCallback((lang) => {
       dispatch({ type: ACTIONS.SET_LANGUAGE, payload: lang });
     }, []),
