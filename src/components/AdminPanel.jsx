@@ -1291,6 +1291,16 @@ function ReportsView({ language, state, actions }) {
 }
 
 // ==================== STORE SETTINGS VIEW (NEW!) ====================
+// Supabase answers "could not find the function …" when the deployed database
+// was created from an older schema.sql and is missing a newer settings RPC.
+// Turn that into an actionable hint instead of raw PostgREST jargon.
+function describeSettingsError(error) {
+  if (/could not find the function/i.test(error?.message || '')) {
+    return 'This store\'s database is missing a newer settings function. Re-run the idempotent supabase/schema.sql in the Supabase SQL Editor, then save again.';
+  }
+  return error?.message || 'Could not save shared settings';
+}
+
 function StoreSettingsView({ state, actions }) {
   const [settings, setSettings] = useState(loadStoreSettings);
   const confirm = useConfirm();
@@ -1344,7 +1354,7 @@ function StoreSettingsView({ state, actions }) {
           settingsToSave.serverCanViewAllOrders
         );
         if (error) {
-          actions.addToast(error.message || 'Could not save shared settings', 'error');
+          actions.addToast(describeSettingsError(error), 'error');
           return;
         }
         const { error: priceError } = await cloudAuth.updateServerPriceAccess(
@@ -1352,13 +1362,13 @@ function StoreSettingsView({ state, actions }) {
           settingsToSave.serverCanEditPrice
         );
         if (priceError) {
-          actions.addToast(priceError.message || 'Could not save shared settings', 'error');
+          actions.addToast(describeSettingsError(priceError), 'error');
           return;
         }
       } else {
         const { error } = await cloudAuth.updateStoreSettings(storeId, settingsToSave);
         if (error) {
-          actions.addToast(error.message || 'Could not save shared settings', 'error');
+          actions.addToast(describeSettingsError(error), 'error');
           return;
         }
       }

@@ -80,10 +80,12 @@ is scaffolded and the first online features are built:
   to create a Supabase Auth user (generated email + 4-digit PIN as password)
   and the `store_members` row. The browser never sees the service key.
 
-To go live: run `supabase/schema.sql` in your Supabase SQL Editor, set
-`VITE_SUPABASE_URL` + `VITE_SUPABASE_ANON_KEY` (client) and, for the staff
-route, `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` (server) as Vercel env
-vars. See `docs/SAAS.md` for the full guide.
+To go live: run `supabase/schema.sql` in your Supabase SQL Editor (and
+**re-run the whole file after app updates** — it is idempotent and only
+adds what is missing), set `VITE_SUPABASE_URL` + `VITE_SUPABASE_ANON_KEY`
+(client) and, for the staff route, `SUPABASE_URL` +
+`SUPABASE_SERVICE_ROLE_KEY` (server) as Vercel env vars. See
+`docs/SAAS.md` for the full guide.
 
 ## Important production requirement: shared users and cloud sync
 
