@@ -73,4 +73,36 @@ assert(!okErr && okLogin?.user && okLogin?.membership?.id === reg.store.id && ok
 const { data: none } = await mock.mockGetStoreBySlug('does-not-exist');
 assert(none === null, 'unknown slug not found');
 
-console.log(process.exitCode ? '\nSOME CHECKS FAILED' : '\nALL CHECKS PASSED');
+
+
+// 7. Store deletion semantics.
+// Give Maria a second membership (store2) directly, like a real shared member.
+const db2 = JSON.parse(localStorage.getItem('cafe-pos-cloud-mock'));
+db2.memberships.push({
+  storeId: reg2.store.id, profileId: maria.id, role: 'server',
+  displayName: 'Maria Santos', pin: '2222', active: true, createdAt: Date.now(),
+});
+localStorage.setItem('cafe-pos-cloud-mock', JSON.stringify(db2));
+
+// Wrong confirmation is rejected.
+const { error: wrongConfirm } = await mock.mockDeleteStore({ storeId: reg2.store.id, confirmName: 'nope' });
+assert(wrongConfirm, 'wrong confirmation rejected');
+
+// Delete store2: owner + Maria are members of store1 too → no accounts removed.
+const { data: del2, error: del2Err } = await mock.mockDeleteStore({ storeId: reg2.store.id, confirmName: 'mycafe-2' });
+assert(!del2Err && del2.deleted === true && del2.removedAccounts === 0, 'shared-member store deleted, no accounts removed');
+const db3 = JSON.parse(localStorage.getItem('cafe-pos-cloud-mock'));
+assert(!db3.stores.some((s) => s.id === reg2.store.id), 'store2 gone');
+assert(db3.users.some((u) => u.id === maria.id), 'shared member account survives');
+assert(db3.memberships.some((m) => m.profileId === maria.id && m.storeId === reg.store.id), 'shared member keeps other membership');
+
+// Delete store1 (confirm by name): owner + Maria only had this store now → both accounts removed.
+const { data: del1 } = await mock.mockDeleteStore({ storeId: reg.store.id, confirmName: 'MyCafe' });
+assert(del1.deleted === true && del1.removedAccounts === 2, 'exclusive accounts removed with their store');
+const db4 = JSON.parse(localStorage.getItem('cafe-pos-cloud-mock'));
+assert(db4.stores.length === 0 && db4.users.length === 0 && db4.memberships.length === 0, 'tenant fully wiped');
+
+// Unknown id → not found, no error thrown.
+const { data: delNone } = await mock.mockDeleteStore({ storeId: 'missing', confirmName: null });
+assert(delNone?.deleted === false, 'unknown store id returns not_found');
+console.log(process.exitCode ? '\nSOME CHECKS FAILED' : '\nALL CHECKS PASSED (incl. store deletion)');

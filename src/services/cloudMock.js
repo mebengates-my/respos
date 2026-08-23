@@ -404,8 +404,7 @@ export async function mockUpdateStoreMember({ storeId, profileId, displayName, r
 }
 
 // Remove a member: drop the membership and the underlying (mock) auth user.
-export async function mockRemoveStoreMember({ storeId, profileId }) {
-  await delay();
+export async function mockRemoveStoreMember({ storeId, profileId }) {  await delay();
   const db = loadDb();
   const index = db.memberships.findIndex(
     (m) => m.storeId === storeId && m.profileId === profileId
@@ -418,4 +417,46 @@ export async function mockRemoveStoreMember({ storeId, profileId }) {
   db.profiles = db.profiles.filter((p) => p.id !== profileId);
   saveDb(db);
   return { data: { ok: true }, error: null };
+}
+
+// Delete a store (tenant) and everything it owns — the in-browser equivalent
+// of the SQL `delete_store()`. Members whose ONLY membership was this store
+// lose their auth account; shared members keep theirs. The confirmation must
+// match the store name or its link slug.
+export async function mockDeleteStore({ storeId, confirmName }) {
+  await delay();
+  const db = loadDb();
+  const store = db.stores.find((s) => s.id === storeId);
+  if (!store) {
+    return { data: { deleted: false, reason: 'not_found' }, error: null };
+  }
+  const slug = store.slug || mockSlugify(store.name);
+  if (confirmName != null && confirmName !== store.name && confirmName !== slug) {
+    return {
+      data: null,
+      error: { message: 'Confirmation does not match the store name or link' },
+    };
+  }
+
+  const storeMembers = db.memberships.filter((m) => m.storeId === storeId);
+  const orphanIds = storeMembers
+    .filter((m) => !db.memberships.some((o) => o.profileId === m.profileId && o.storeId !== storeId))
+    .map((m) => m.profileId);
+
+  db.stores = db.stores.filter((s) => s.id !== storeId);
+  db.memberships = db.memberships.filter((m) => m.storeId !== storeId);
+  db.users = db.users.filter((u) => !orphanIds.includes(u.id));
+  db.profiles = db.profiles.filter((p) => !orphanIds.includes(p.id));
+  saveDb(db);
+
+  // If the operator just deleted the store they were signed in to, sign out.
+  const sessionId = currentSessionId();
+  if (sessionId && orphanIds.includes(sessionId)) {
+    saveToStorage(MOCK_SESSION_KEY, null);
+  }
+
+  return {
+    data: { deleted: true, store: store.name, removedAccounts: orphanIds.length },
+    error: null,
+  };
 }

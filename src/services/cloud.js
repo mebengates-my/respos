@@ -13,6 +13,7 @@ import {
   mockGetStoreBySlug,
   mockGetStoreRoster,
   mockPinLogin,
+  mockDeleteStore,
 } from './cloudMock';
 
 // Cloud mode is enabled only when Supabase credentials are provided via env.
@@ -288,6 +289,20 @@ export const cloudAuth = {
       return mockRemoveStoreMember({ storeId, profileId });
     }
     return callProvisionApi({ action: 'remove', storeId, profileId });
+  },
+
+  // Delete the whole store (tenant). Runs the SQL delete_store() RPC, which
+  // only the store's own admin (signed in) or the SaaS operator (service
+  // role) may call. Cascades the store's menu/tables/orders/expenses and
+  // deletes auth accounts whose only membership was this store.
+  async deleteStore({ storeId, confirmName }) {
+    if (!isCloudEnabled) return mockDeleteStore({ storeId, confirmName });
+    const { data, error } = await supabase.rpc('delete_store', {
+      p_store_id: storeId,
+      p_confirm_name: confirmName ?? null,
+    });
+    if (error) return { data: null, error };
+    return { data, error: null };
   },
 };
 

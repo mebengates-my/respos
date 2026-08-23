@@ -362,17 +362,19 @@ grant execute on function public.verify_pin(text, uuid, text) to anon, authentic
 --     who also belong to another store keep their account and
 --     merely lose this membership.
 --
--- SAFETY: pass the exact store name as p_confirm_name — a mismatch
--- aborts. Cheap insurance against pasting the wrong store id.
+-- SAFETY: pass the exact store name OR its link slug (…/mycafe) as
+-- p_confirm_name — a mismatch aborts. Cheap insurance against pasting
+-- the wrong store id.
 -- ============================================================
 create or replace function public.delete_store(p_store_id uuid, p_confirm_name text default null)
 returns jsonb
 language plpgsql security definer set search_path = public as $$
 declare
   store_name text;
+  store_slug text;
   orphan_profiles uuid[];
 begin
-  select name into store_name from public.stores where id = p_store_id;
+  select name, slug into store_name, store_slug from public.stores where id = p_store_id;
   if store_name is null then
     return jsonb_build_object('deleted', false, 'reason', 'not_found');
   end if;
@@ -388,9 +390,11 @@ begin
     raise exception 'Not allowed';
   end if;
 
-  -- Optional exact-name confirmation.
-  if p_confirm_name is not null and p_confirm_name <> store_name then
-    raise exception 'Confirmation name does not match the store name';
+  -- Optional confirmation: must match the store name OR its link slug.
+  if p_confirm_name is not null
+     and p_confirm_name <> store_name
+     and p_confirm_name <> coalesce(store_slug, '') then
+    raise exception 'Confirmation does not match the store name or link';
   end if;
 
   -- Members that belong ONLY to this store — their accounts go with it.
