@@ -155,7 +155,12 @@ const initialState = {
   
   // Menu
   menuDataVersion: MENU_DATA_VERSION,
-  selectedCategory: initialCategories[0]?.id || 'rice',
+  // The POS opens on the first *default* category (starred by an Admin or
+  // Manager in Category Management) so its items are on screen right away.
+  selectedCategory:
+    initialCategories.find(category => category.isDefault)?.id ||
+    initialCategories[0]?.id ||
+    'rice',
   categories: initialCategories,
   menuItems: initialMenuItems,
   discountPresets,
@@ -221,9 +226,16 @@ function getPersistedState(savedState) {
   const categories = hasCurrentMenuSchema ? savedState.categories : initialCategories;
   const menuItems = hasCurrentMenuSchema ? savedState.menuItems : initialMenuItems;
   const categoryIds = new Set(categories.map(category => category.id));
-  const selectedCategory = categoryIds.has(savedState?.selectedCategory)
-    ? savedState.selectedCategory
-    : categories[0]?.id || null;
+  // Default categories (starred in Admin/Manager → Category Management) decide
+  // what the POS opens on: the first starred category is selected so its items
+  // are shown. With no starred category, keep the last selection when it still
+  // exists, otherwise fall back to the first category.
+  const defaultCategory = categories.find(category => category.isDefault);
+  const selectedCategory = defaultCategory
+    ? defaultCategory.id
+    : categoryIds.has(savedState?.selectedCategory)
+      ? savedState.selectedCategory
+      : categories[0]?.id || null;
 
   return {
     tables: savedState?.tables || initialTables,
@@ -355,6 +367,7 @@ function appReducer(state, action) {
     case ACTIONS.ADD_CATEGORY: {
       const newCategory = {
         id: `cat-${Date.now()}`,
+        isDefault: false,
         ...action.payload,
       };
       return { ...state, categories: [...state.categories, newCategory] };
@@ -372,12 +385,15 @@ function appReducer(state, action) {
     
     case ACTIONS.DELETE_CATEGORY: {
       const categories = state.categories.filter(cat => cat.id !== action.payload);
+      // When the selected tab disappears, reopen the first default category
+      // (or the first remaining category when nothing is starred).
+      const fallback = categories.find(cat => cat.isDefault) || categories[0];
       return {
         ...state,
         categories,
         menuItems: state.menuItems.filter(item => item.categoryId !== action.payload),
         selectedCategory: state.selectedCategory === action.payload
-          ? categories[0]?.id || null
+          ? fallback?.id || null
           : state.selectedCategory,
       };
     }

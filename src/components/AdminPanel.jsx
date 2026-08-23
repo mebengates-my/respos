@@ -51,7 +51,8 @@ import {
   AlertTriangle,
   Bike,
   X,
-  PlusCircle
+  PlusCircle,
+  Star
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -604,6 +605,12 @@ function CategoriesView({ language, state, actions }) {
     setEditingCategory(null);
     setFormData({ name: '', icon: 'Coffee' });
   };
+
+  // Star/unstar a category as a *default*. The POS opens with the first
+  // default category selected and shows its items right away.
+  const toggleDefault = (cat) => {
+    actions.updateCategory(cat.id, { isDefault: !cat.isDefault });
+  };
   
   return (
     <div className="p-6">
@@ -611,18 +618,39 @@ function CategoriesView({ language, state, actions }) {
         <h1 className="text-2xl font-display font-bold text-dark-roast">{t('categoryManagement', language)}</h1>
         <button onClick={() => { setEditingCategory(null); setFormData({ name: '', icon: 'Coffee' }); setShowModal(true); }} className="flex items-center gap-2 px-4 py-2 bg-accent text-white rounded-xl"><Plus className="w-5 h-5" /> {t('addCategory', language)}</button>
       </div>
+
+      {/* Default categories explanation */}
+      <div className="mb-6 flex items-start gap-3 p-4 bg-accent/10 border border-accent/20 rounded-2xl">
+        <Star className="w-5 h-5 text-accent shrink-0 mt-0.5" fill="currentColor" strokeWidth={0} />
+        <p className="text-sm text-medium-roast leading-relaxed">{t('defaultCategoryHint', language)}</p>
+      </div>
+
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         {categories.map(cat => (
-          <div key={cat.id} className="bg-white rounded-2xl p-4 shadow-sm">
+          <div key={cat.id} className={`bg-white rounded-2xl p-4 shadow-sm border ${cat.isDefault ? 'border-accent/40' : 'border-transparent'}`}>
             <div className="flex items-center justify-between mb-3">
               <div className="w-12 h-12 bg-espresso/10 rounded-xl flex items-center justify-center"><Coffee className="w-6 h-6 text-espresso" /></div>
               <div className="flex gap-1">
+                <button
+                  onClick={() => toggleDefault(cat)}
+                  aria-pressed={Boolean(cat.isDefault)}
+                  title={t('defaultLabel', language)}
+                  className={`p-1.5 rounded-lg transition-colors ${cat.isDefault ? 'bg-accent/10 text-accent' : 'hover:bg-latte/20 text-medium-roast'}`}
+                >
+                  <Star className="w-4 h-4" fill={cat.isDefault ? 'currentColor' : 'none'} />
+                </button>
                 <button onClick={() => { setEditingCategory(cat); setFormData({ name: cat.name, icon: cat.icon }); setShowModal(true); }} className="p-1.5 hover:bg-latte/20 rounded-lg"><Edit className="w-4 h-4" /></button>
                 <button onClick={async () => { if (await confirm({ title: t('categoryName', language), message: t('confirmDelete', language), confirmLabel: t('delete', language), danger: true })) { actions.deleteCategory(cat.id); } }} className="p-1.5 hover:bg-error/10 rounded-lg"><Trash2 className="w-4 h-4 text-error" /></button>
               </div>
             </div>
             <h3 className="font-semibold text-dark-roast">{cat.name}</h3>
             <p className="text-sm text-medium-roast">{menuItems.filter(m => m.categoryId === cat.id).length} items</p>
+            {cat.isDefault && (
+              <span className="inline-flex items-center gap-1 mt-2 px-2 py-0.5 bg-accent/10 text-accent text-xs font-medium rounded-full">
+                <Star className="w-3 h-3" fill="currentColor" strokeWidth={0} />
+                {t('defaultLabel', language)}
+              </span>
+            )}
           </div>
         ))}
       </div>
