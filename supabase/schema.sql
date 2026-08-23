@@ -128,6 +128,12 @@ create table if not exists public.orders (
 -- Safe migration for projects created before server attribution was stored.
 alter table public.orders add column if not exists server_name text not null default '';
 
+-- Safe migration: food-delivery orders (GrabFood, foodpanda, Shopee Food, …)
+-- park on the walk-in counter and carry their service name here. Delivery rows
+-- keep table_ref = 'COUNTER', so the one-open-order-per-table index still holds
+-- and several courier orders can be open at once.
+alter table public.orders add column if not exists delivery_channel text;
+
 create table if not exists public.expense_categories (
   id uuid primary key default gen_random_uuid(),
   store_id uuid not null references public.stores(id) on delete cascade,

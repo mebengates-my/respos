@@ -4,6 +4,7 @@ import {
   categories as initialCategories,
   initialTables,
   discountPresets,
+  defaultDeliveryChannels,
   TAX_RATE,
   MENU_DATA_VERSION
 } from '../data/menuData';
@@ -56,6 +57,12 @@ const ACTIONS = {
   DELETE_TABLE: 'DELETE_TABLE',
   UPDATE_TABLE_STATUS: 'UPDATE_TABLE_STATUS',
   TRANSFER_TABLE: 'TRANSFER_TABLE',
+
+  // Food-delivery services (Grab / foodpanda / Shopee Food / …)
+  SELECT_DELIVERY_CHANNEL: 'SELECT_DELIVERY_CHANNEL',
+  ADD_DELIVERY_CHANNEL: 'ADD_DELIVERY_CHANNEL',
+  UPDATE_DELIVERY_CHANNEL: 'UPDATE_DELIVERY_CHANNEL',
+  DELETE_DELIVERY_CHANNEL: 'DELETE_DELIVERY_CHANNEL',
   
   // Users (Admin)
   ADD_USER: 'ADD_USER',
@@ -165,6 +172,11 @@ const initialState = {
   // default, so a server can start a walk-in order immediately.
   selectedTable: initialTables.find(table => table.isCounter) || null,
   tables: initialTables,
+  // Food-delivery services (manager/admin configured). Selecting one points the
+  // current order at that channel instead of a table; the counter "table" is
+  // still used underneath so nothing structural changes for an order.
+  deliveryChannels: defaultDeliveryChannels,
+  selectedDeliveryChannel: null,
   
   // Users
   users: defaultUsers,
@@ -211,6 +223,11 @@ function getPersistedState(savedState) {
 
   return {
     tables: savedState?.tables || initialTables,
+    // Array.isArray keeps an intentionally emptied list empty (a manager who
+    // deleted every delivery service should not get the defaults back).
+    deliveryChannels: Array.isArray(savedState?.deliveryChannels)
+      ? savedState.deliveryChannels
+      : defaultDeliveryChannels,
     orderHistory: savedState?.orderHistory || [],
     openOrders: savedState?.openOrders || [],
     heldOrders: savedState?.heldOrders || [],
@@ -247,6 +264,7 @@ function appReducer(state, action) {
         view: action.payload.role === 'admin' || action.payload.role === 'manager' ? 'admin' : 'pos',
         currentOrder: null,
         selectedTable: state.tables.find(table => table.isCounter) || null,
+        selectedDeliveryChannel: null,
       };
     
     case ACTIONS.LOGOUT:
@@ -258,6 +276,7 @@ function appReducer(state, action) {
         currentOrder: null,
         openOrders: state.currentUser?.cloud ? [] : state.openOrders,
         selectedTable: state.tables.find(table => table.isCounter) || null,
+        selectedDeliveryChannel: null,
         cloudSession: null,
       };
 
@@ -276,6 +295,7 @@ function appReducer(state, action) {
         // the tenant-scoped Supabase query is loading.
         openOrders: [],
         selectedTable: state.tables.find(table => table.isCounter) || null,
+        selectedDeliveryChannel: null,
       };
     
     case ACTIONS.SET_LANGUAGE:
@@ -397,13 +417,66 @@ function appReducer(state, action) {
       return {
         ...state,
         selectedTable: table,
+        // Picking a table (or walk-in) leaves delivery mode — an order is
+        // either for a seat in the house or for a delivery channel.
+        selectedDeliveryChannel: null,
         // The table is chosen before items are submitted. If a draft already
         // has items, keep its table reference in step with the selector.
         currentOrder: state.currentOrder
-          ? { ...state.currentOrder, tableId: table?.id || 'COUNTER' }
+          ? { ...state.currentOrder, tableId: table?.id || 'COUNTER', deliveryChannel: null }
           : null,
       };
     }
+
+    // Food-delivery services
+    case ACTIONS.SELECT_DELIVERY_CHANNEL: {
+      const channel = action.payload || null;
+      return {
+        ...state,
+        selectedDeliveryChannel: channel,
+        // A delivery order has no seat: park it on the walk-in counter table.
+        selectedTable: channel
+          ? state.tables.find(table => table.isCounter) || null
+          : state.selectedTable,
+        currentOrder: state.currentOrder && channel
+          ? { ...state.currentOrder, tableId: 'COUNTER', deliveryChannel: { ...channel } }
+          : state.currentOrder,
+      };
+    }
+
+    case ACTIONS.ADD_DELIVERY_CHANNEL: {
+      const newChannel = {
+        id: `dl-${Date.now()}`,
+        active: true,
+        ...action.payload,
+      };
+      return { ...state, deliveryChannels: [...state.deliveryChannels, newChannel] };
+    }
+
+    case ACTIONS.UPDATE_DELIVERY_CHANNEL: {
+      const { id, updates } = action.payload;
+      // Keep an in-progress selection in step with edits (e.g. rename).
+      const selectedStillCurrent = state.selectedDeliveryChannel?.id === id;
+      const deliveryChannels = state.deliveryChannels.map(channel =>
+        channel.id === id ? { ...channel, ...updates } : channel
+      );
+      return {
+        ...state,
+        deliveryChannels,
+        selectedDeliveryChannel: selectedStillCurrent
+          ? deliveryChannels.find(channel => channel.id === id)
+          : state.selectedDeliveryChannel,
+      };
+    }
+
+    case ACTIONS.DELETE_DELIVERY_CHANNEL:
+      return {
+        ...state,
+        deliveryChannels: state.deliveryChannels.filter(channel => channel.id !== action.payload),
+        selectedDeliveryChannel: state.selectedDeliveryChannel?.id === action.payload
+          ? null
+          : state.selectedDeliveryChannel,
+      };
     
     case ACTIONS.ADD_TABLE: {
       const maxNumber = Math.max(...state.tables.filter(t => !t.isCounter).map(t => t.number), 0);
@@ -602,7 +675,14 @@ function appReducer(state, action) {
             items: [], 
             status: 'open',
             createdAt: Date.now(),
-            tableId: state.selectedTable?.id || 'COUNTER',
+            // A delivery order (Grab/foodpanda/…) rides on the counter table but
+            // carries its channel so boards, receipts and reports can label it.
+            tableId: state.selectedDeliveryChannel
+              ? 'COUNTER'
+              : state.selectedTable?.id || 'COUNTER',
+            deliveryChannel: state.selectedDeliveryChannel
+              ? { ...state.selectedDeliveryChannel }
+              : null,
             serverId: state.currentUser?.id,
             serverName: state.currentUser?.name,
           }),
@@ -741,6 +821,7 @@ function appReducer(state, action) {
         openOrders,
         currentOrder: null,
         selectedTable: state.tables.find(table => table.isCounter) || null,
+        selectedDeliveryChannel: null,
         tables: state.tables.map(table =>
           table.id === submitted.tableId && !table.isCounter
             ? { ...table, status: 'occupied', currentOrderId: submitted.id }
@@ -751,12 +832,16 @@ function appReducer(state, action) {
 
     case ACTIONS.EDIT_OPEN_ORDER: {
       const order = action.payload;
+      const channel = order.deliveryChannel || null;
       return {
         ...state,
         currentOrder: { ...order, status: 'open', isEditing: true },
-        selectedTable: state.tables.find(table => table.id === order.tableId)
-          || state.tables.find(table => table.isCounter)
-          || null,
+        selectedTable: channel
+          ? state.tables.find(table => table.isCounter) || null
+          : state.tables.find(table => table.id === order.tableId)
+            || state.tables.find(table => table.isCounter)
+            || null,
+        selectedDeliveryChannel: channel,
         view: 'pos',
       };
     }
@@ -795,20 +880,25 @@ function appReducer(state, action) {
         heldOrders: [...state.heldOrders, heldOrder],
         currentOrder: null,
         selectedTable: state.tables.find(table => table.isCounter) || null,
+        selectedDeliveryChannel: null,
       };
     }
     
     case ACTIONS.RECALL_ORDER: {
       const orderToRecall = action.payload;
       const newHeldOrders = state.heldOrders.filter(o => o.id !== orderToRecall.id);
+      const channel = orderToRecall.deliveryChannel || null;
       
       return {
         ...state,
         heldOrders: newHeldOrders,
         currentOrder: { ...orderToRecall, status: 'open' },
-        selectedTable: state.tables.find(t => t.id === orderToRecall.tableId) || null,
+        selectedTable: channel
+          ? state.tables.find(t => t.isCounter) || null
+          : state.tables.find(t => t.id === orderToRecall.tableId) || null,
+        selectedDeliveryChannel: channel,
         tables: state.tables.map(table =>
-          table.id === orderToRecall.tableId
+          table.id === orderToRecall.tableId && !table.isCounter
             ? { ...table, status: 'occupied', currentOrderId: orderToRecall.id }
             : table
         ),
@@ -837,6 +927,7 @@ function appReducer(state, action) {
         currentOrder: null,
         openOrders: state.openOrders.filter(order => order.id !== completedOrder.id),
         selectedTable: state.tables.find(table => table.isCounter) || null,
+        selectedDeliveryChannel: null,
         orderHistory: [completedOrder, ...state.orderHistory],
         tables: newTables,
         isPaymentModalOpen: false,
@@ -862,6 +953,7 @@ function appReducer(state, action) {
         currentOrder: null,
         openOrders: state.openOrders.filter(order => order.id !== voidedOrder.id),
         selectedTable: state.tables.find(table => table.isCounter) || null,
+        selectedDeliveryChannel: null,
         orderHistory: [voidedOrder, ...state.orderHistory],
         tables: newTables,
       };
@@ -1130,6 +1222,7 @@ export function AppProvider({ children }) {
       saveToStorage('cafe-pos-state', {
         menuDataVersion: MENU_DATA_VERSION,
         tables: state.tables,
+        deliveryChannels: state.deliveryChannels,
         orderHistory: state.orderHistory,
         openOrders: state.openOrders,
         heldOrders: state.heldOrders,
@@ -1147,6 +1240,7 @@ export function AppProvider({ children }) {
     return () => clearTimeout(timeoutId);
   }, [
     state.tables,
+    state.deliveryChannels,
     state.orderHistory,
     state.openOrders,
     state.heldOrders,
@@ -1275,6 +1369,23 @@ export function AppProvider({ children }) {
     
     transferTable: useCallback((fromTableId, toTableId) => {
       dispatch({ type: ACTIONS.TRANSFER_TABLE, payload: { fromTableId, toTableId } });
+    }, []),
+    
+    // Food-delivery services
+    selectDeliveryChannel: useCallback((channel) => {
+      dispatch({ type: ACTIONS.SELECT_DELIVERY_CHANNEL, payload: channel });
+    }, []),
+    
+    addDeliveryChannel: useCallback((data) => {
+      dispatch({ type: ACTIONS.ADD_DELIVERY_CHANNEL, payload: data });
+    }, []),
+    
+    updateDeliveryChannel: useCallback((id, updates) => {
+      dispatch({ type: ACTIONS.UPDATE_DELIVERY_CHANNEL, payload: { id, updates } });
+    }, []),
+    
+    deleteDeliveryChannel: useCallback((id) => {
+      dispatch({ type: ACTIONS.DELETE_DELIVERY_CHANNEL, payload: id });
     }, []),
     
     // Users

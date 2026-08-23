@@ -17,7 +17,8 @@ const PAYMENT_LABELS = {
   ewallet: 'E-Wallet',
 };
 
-function tableLabel(tableId) {
+function tableLabel(tableId, order) {
+  if (order?.deliveryChannel?.name) return order.deliveryChannel.name;
   if (!tableId || tableId === 'COUNTER') return 'Counter';
   return `Table ${String(tableId).replace('T', '')}`;
 }
@@ -147,7 +148,7 @@ export function downloadSalesReportPdf({ rangeLabel, orders }) {
     head: [['Order', 'Table', 'Payment', 'Items', 'Time', 'Total']],
     body: orders.map(order => [
       order.id.slice(-8),
-      tableLabel(order.tableId),
+      tableLabel(order.tableId, order),
       PAYMENT_LABELS[order.paymentMethod] || order.paymentMethod || '-',
       String(order.items.reduce((s, i) => s + i.quantity, 0)),
       order.paidAt ? new Date(order.paidAt).toLocaleString() : '-',

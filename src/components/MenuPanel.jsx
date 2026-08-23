@@ -1,4 +1,5 @@
 import { useApp } from '../context/AppContext';
+import { resolveModifierGroups } from '../data/menuData';
 import {
   Coffee,
   Utensils,
@@ -10,7 +11,8 @@ import {
   Candy,
   Cake,
   Plus,
-  Flame
+  Flame,
+  Grid3X3
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -72,7 +74,7 @@ export default function MenuPanel() {
                 key={item.id}
                 item={item}
                 onAdd={() => {
-                  if (item.modifiers && item.modifiers.length > 0) {
+                  if (resolveModifierGroups(item).length > 0) {
                     actions.openModifierModal(item);
                   } else {
                     actions.addItem(item, [], 1, '');
@@ -85,30 +87,24 @@ export default function MenuPanel() {
         </div>
       </div>
       
-      {/* Quick actions */}
+      {/* Quick actions — one shortcut to the floor view (it covers both
+          picking a table and general table management). */}
       <div className="p-4 border-t border-latte/20 bg-white">
-        <div className="flex gap-2">
-          <button
-            onClick={() => actions.setView('tables')}
-            className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-latte/10 text-espresso rounded-xl font-medium hover:bg-latte/20 transition-colors btn-press"
-          >
-            <span>📋</span>
-            <span>Select Table</span>
-          </button>
-          <button
-            onClick={() => actions.setView('tables')}
-            className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-latte/10 text-espresso rounded-xl font-medium hover:bg-latte/20 transition-colors btn-press"
-          >
-            <span>🪑</span>
-            <span>Table View</span>
-          </button>
-        </div>
+        <button
+          onClick={() => actions.setView('tables')}
+          className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-latte/10 text-espresso rounded-xl font-medium hover:bg-latte/20 transition-colors btn-press"
+        >
+          <Grid3X3 className="w-5 h-5" />
+          <span>Tables &amp; Floor</span>
+        </button>
       </div>
     </div>
   );
 }
 
 function MenuItemCard({ item, onAdd, disabled }) {
+  const customizable = resolveModifierGroups(item).length > 0;
+  
   const handleAdd = (event) => {
     event.stopPropagation();
     if (!disabled) onAdd();
@@ -164,7 +160,7 @@ function MenuItemCard({ item, onAdd, disabled }) {
             RM {(item.price / 100).toFixed(2)}
           </span>
           
-          {item.modifiers && item.modifiers.length > 0 && (
+          {customizable && (
             <span className="text-xs text-latte flex items-center gap-1">
               <Flame className="w-3 h-3" />
               Customizable

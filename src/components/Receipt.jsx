@@ -45,7 +45,9 @@ export const generateThermalReceiptText = (order, settings, isReprint = false) =
   if (order.serverId || order.serverName) {
     lines.push(`Server: ${order.serverName || order.serverId}`);
   }
-  if (order.tableId && order.tableId !== 'COUNTER') {
+  if (order.deliveryChannel?.name) {
+    lines.push(`Via   : ${order.deliveryChannel.name} (delivery)`);
+  } else if (order.tableId && order.tableId !== 'COUNTER') {
     lines.push(`Table : ${order.tableId.replace('T', '')}`);
   } else {
     lines.push(`Table : COUNTER`);
@@ -260,7 +262,11 @@ export default function Receipt({ order, onClose, showPrint = true }) {
               <div>Date : {now.toLocaleDateString('en-GB')}</div>
               <div>Time : {now.toLocaleTimeString('en-GB')}</div>
               <div>Order: #{order.id.slice(-8)}</div>
-              <div>Table: {order.tableId === 'COUNTER' ? 'COUNTER' : order.tableId?.replace('T', '') || 'N/A'}</div>
+              <div>
+                {order.deliveryChannel?.name
+                  ? `Delivery: ${order.deliveryChannel.name}`
+                  : `Table: ${order.tableId === 'COUNTER' ? 'COUNTER' : order.tableId?.replace('T', '') || 'N/A'}`}
+              </div>
             </div>
             <div className="border-t border-b border-dashed border-gray-400 my-2 py-2">
               {order.items.map((item, i) => (
