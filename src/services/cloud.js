@@ -128,13 +128,23 @@ export const cloudAuth = {
   },
 
   // Stores the signed-in user is an active member of, with membership role.
+  //
+  // NOTE: the `members_select` RLS policy lets a member read *every* row of the
+  // stores they belong to, so this query MUST be scoped to the current user.
+  // Without the profile_id filter a manager/server would receive the whole
+  // roster and pick up somebody else's role (usually the owner's "admin").
   async listMyStores() {
     if (!isCloudEnabled) return mockListMyStores();
+    const { data: authData } = await supabase.auth.getUser();
+    const profileId = authData?.user?.id;
+    if (!profileId) return { data: [], error: null };
+
     const { data, error } = await supabase
       .from('store_members')
       .select(
         'store_id, role, display_name, pin, active, stores(id, name, slug, currency, tax_rate)'
-      );
+      )
+      .eq('profile_id', profileId);
     if (error) return { data: [], error };
 
     const stores = (data || [])

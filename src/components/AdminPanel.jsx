@@ -1,7 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
 import { t } from '../data/language';
-import { loadStoreSettings, saveStoreSettings } from '../data/storeSettings';
+import { loadStoreSettings, saveStoreSettings, defaultStoreSettings } from '../data/storeSettings';
+import { navigate } from '../utils/router';
+import DeleteStoreModal from './DeleteStoreModal';
 import { downloadSalesReportPdf } from '../utils/pdfReport';
 import { formatElapsedTime } from '../utils/helpers';
 import { useConfirm } from './ConfirmDialog';
@@ -43,7 +45,8 @@ import {
   TrendingDown,
   CalendarDays,
   Upload,
-  Database
+  Database,
+  AlertTriangle
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -845,9 +848,36 @@ function StoreSettingsView({ language, state, actions }) {
   const [settings, setSettings] = useState(loadStoreSettings);
   const confirm = useConfirm();
   const [saved, setSaved] = useState(false);
-  
+  const [showDeleteStore, setShowDeleteStore] = useState(false);
+
+  // Tax master switch (default on for settings saved before it existed).
+  const taxEnabled = settings.taxEnabled !== false;
+  const previewRate = taxEnabled ? (settings.taxRate || 0) : 0;
+  const previewSubtotal = 1400; // cents — the sample receipt's two items
+  const previewTax = Math.round(previewSubtotal * previewRate);
+  const previewMoney = (cents) =>
+    `${settings.currencySymbol || settings.currency || 'RM'} ${(cents / 100).toFixed(2)}`;
+
+  // Store deletion is a cloud-only, owner (admin) action.
+  const cloudAdmin = Boolean(state.currentUser?.cloud && state.currentUser?.role === 'admin');
+  const storeId = state.currentUser?.storeId || state.cloudSession?.storeId || null;
+  const storeSlug = state.currentUser?.storeSlug || null;
+
+  const handleStoreDeleted = (result) => {
+    setShowDeleteStore(false);
+    actions.addToast(
+      `Store deleted (${result?.removedAccounts ?? 0} staff account(s) removed)`,
+      'success'
+    );
+    // The store — and possibly this very account — no longer exists.
+    actions.logout();
+    navigate('/');
+  };
+
   const handleSave = () => {
     saveStoreSettings(settings);
+    // Push the tax configuration into the POS so the cart re-prices immediately.
+    actions.setTaxSettings({ taxRate: settings.taxRate, taxEnabled });
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
     actions.addToast('Settings saved!', 'success');
@@ -861,8 +891,12 @@ function StoreSettingsView({ language, state, actions }) {
       danger: true,
     });
     if (ok) {
+      saveStoreSettings(defaultStoreSettings);
       setSettings(loadStoreSettings());
-      saveStoreSettings(loadStoreSettings());
+      actions.setTaxSettings({
+        taxRate: defaultStoreSettings.taxRate,
+        taxEnabled: defaultStoreSettings.taxEnabled,
+      });
       actions.addToast('Settings reset to default', 'info');
     }
   };
@@ -920,7 +954,9 @@ function StoreSettingsView({ language, state, actions }) {
       actions.importBackup(data);
       if (data.storeSettings && typeof data.storeSettings === 'object') {
         saveStoreSettings(data.storeSettings);
-        setSettings(loadStoreSettings());
+        const restored = loadStoreSettings();
+        setSettings(restored);
+        actions.setTaxSettings({ taxRate: restored.taxRate, taxEnabled: restored.taxEnabled });
       }
       actions.addToast('Backup restored', 'success');
     };
@@ -994,10 +1030,30 @@ function StoreSettingsView({ language, state, actions }) {
             <h2 className="font-semibold">Tax & Currency Settings</h2>
           </div>
           <div className="p-6 space-y-4">
+            {/* Master tax switch. Off = no tax on orders and no tax line on receipts. */}
+            <div className="flex items-center justify-between p-4 bg-cream rounded-xl">
+              <div>
+                <p className="font-medium">Apply Tax</p>
+                <p className="text-sm text-medium-roast">
+                  {taxEnabled
+                    ? 'Tax is added to every order and shown on receipts'
+                    : 'No tax is charged and no tax line appears on receipts'}
+                </p>
+              </div>
+              <button
+                aria-label="Toggle tax"
+                aria-pressed={taxEnabled}
+                onClick={() => setSettings({ ...settings, taxEnabled: !taxEnabled })}
+                className={`relative w-14 h-8 rounded-full transition-colors ${taxEnabled ? 'bg-success' : 'bg-latte/30'}`}
+              >
+                <div className={`absolute top-1 w-6 h-6 bg-white rounded-full shadow transition-transform ${taxEnabled ? 'left-7' : 'left-1'}`} />
+              </button>
+            </div>
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="block text-sm font-medium text-medium-roast mb-2">Tax Rate (%)</label>
-                <input type="number" step="0.1" min="0" max="100" value={settings.taxRate * 100} onChange={e => setSettings({ ...settings, taxRate: parseFloat(e.target.value) / 100 })} className="w-full px-4 py-3 bg-cream border border-latte/30 rounded-xl focus:outline-none focus:border-accent font-mono" />
+                <input type="number" step="0.1" min="0" max="100" disabled={!taxEnabled} value={Number.isFinite(settings.taxRate) ? settings.taxRate * 100 : 0} onChange={e => setSettings({ ...settings, taxRate: (parseFloat(e.target.value) || 0) / 100 })} className="w-full px-4 py-3 bg-cream border border-latte/30 rounded-xl focus:outline-none focus:border-accent font-mono disabled:opacity-50 disabled:cursor-not-allowed" />
+                {!taxEnabled && <p className="text-xs text-medium-roast mt-2">Tax is switched off — orders are charged without tax.</p>}
               </div>
               <div>
                 <label className="block text-sm font-medium text-medium-roast mb-2">Currency Code</label>
@@ -1059,13 +1115,15 @@ function StoreSettingsView({ language, state, actions }) {
                   <div className="text-[9px]">Order: #ABC12345</div>
                   <div className="text-[9px] border-b border-dashed border-gray-400 pb-2 mb-2">────────────────────────────────</div>
                   <div className="text-[9px] space-y-1">
-                    <div className="flex justify-between"><span>1x Latte</span><span>RM 8.00</span></div>
-                    <div className="flex justify-between"><span>1x Croissant</span><span>RM 6.00</span></div>
+                    <div className="flex justify-between"><span>1x Latte</span><span>{previewMoney(800)}</span></div>
+                    <div className="flex justify-between"><span>1x Croissant</span><span>{previewMoney(600)}</span></div>
                   </div>
                   <div className="border-t border-dashed border-gray-400 mt-2 pt-2 text-[9px]">
-                    <div className="flex justify-between"><span>SUBTOTAL</span><span>RM 14.00</span></div>
-                    <div className="flex justify-between"><span>TAX (6%)</span><span>RM 0.84</span></div>
-                    <div className="flex justify-between font-bold border-t border-dashed border-gray-400 mt-1 pt-1"><span>TOTAL</span><span>RM 14.84</span></div>
+                    <div className="flex justify-between"><span>SUBTOTAL</span><span>{previewMoney(previewSubtotal)}</span></div>
+                    {taxEnabled && (
+                      <div className="flex justify-between"><span>TAX ({(previewRate * 100).toFixed(0)}%)</span><span>{previewMoney(previewTax)}</span></div>
+                    )}
+                    <div className="flex justify-between font-bold border-t border-dashed border-gray-400 mt-1 pt-1"><span>TOTAL</span><span>{previewMoney(previewSubtotal + previewTax)}</span></div>
                   </div>
                   <div className="text-center text-[9px] mt-4 border-t border-dashed border-gray-400 pt-2">{settings.receiptFooter || 'Thank you!'}</div>
                 </div>
@@ -1112,7 +1170,45 @@ function StoreSettingsView({ language, state, actions }) {
             </div>
           </div>
         </div>
+
+        {/* Danger Zone — deleting the whole store (owner/admin, cloud stores only) */}
+        {cloudAdmin && (
+          <div className="bg-white rounded-2xl shadow-sm overflow-hidden border border-error/30">
+            <div className="p-4 bg-error/10">
+              <h2 className="font-semibold flex items-center gap-2 text-error">
+                <AlertTriangle className="w-5 h-5" /> Danger Zone
+              </h2>
+            </div>
+            <div className="p-6 space-y-4">
+              <div>
+                <p className="font-medium text-dark-roast">Delete this store</p>
+                <p className="text-sm text-medium-roast mt-1">
+                  Permanently removes this store and everything in it — menu, tables, orders,
+                  expenses and staff accounts that belong only to this store. The store link
+                  {storeSlug ? <span className="font-mono"> /{storeSlug}</span> : null} will stop working.
+                  This cannot be undone.
+                </p>
+              </div>
+              <button
+                onClick={() => setShowDeleteStore(true)}
+                className="flex items-center gap-2 px-4 py-3 bg-error text-white rounded-xl font-medium hover:bg-error/90 transition-colors"
+              >
+                <Trash2 className="w-5 h-5" />
+                Delete store…
+              </button>
+            </div>
+          </div>
+        )}
       </div>
+
+      {showDeleteStore && (
+        <DeleteStoreModal
+          storeId={storeId}
+          storeSlug={storeSlug}
+          onClose={() => setShowDeleteStore(false)}
+          onDeleted={handleStoreDeleted}
+        />
+      )}
     </div>
   );
 }

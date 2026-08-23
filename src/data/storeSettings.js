@@ -1,4 +1,6 @@
 // Store settings - editable by admin
+export const STORE_SETTINGS_STORAGE_KEY = 'cafe-pos-store-settings';
+
 export const defaultStoreSettings = {
   name: 'Café POS',
   tagline: 'Fresh Coffee, Great Moments',
@@ -7,6 +9,9 @@ export const defaultStoreSettings = {
   phone: '+60 3-1234 5678',
   email: 'hello@cafepos.com',
   taxId: 'GST-0000000',
+  // Master switch for tax. When false no tax is added to orders and the tax
+  // line disappears from the cart summary and every receipt.
+  taxEnabled: true,
   taxRate: 0.06, // 6% SST
   currency: 'RM',
   currencySymbol: 'RM',
@@ -19,7 +24,7 @@ export const defaultStoreSettings = {
 // Load settings from localStorage
 export const loadStoreSettings = () => {
   try {
-    const stored = localStorage.getItem('cafe-pos-store-settings');
+    const stored = localStorage.getItem(STORE_SETTINGS_STORAGE_KEY);
     return stored ? { ...defaultStoreSettings, ...JSON.parse(stored) } : defaultStoreSettings;
   } catch {
     return defaultStoreSettings;
@@ -29,7 +34,7 @@ export const loadStoreSettings = () => {
 // Save settings to localStorage
 export const saveStoreSettings = (settings) => {
   try {
-    localStorage.setItem('cafe-pos-store-settings', JSON.stringify(settings));
+    localStorage.setItem(STORE_SETTINGS_STORAGE_KEY, JSON.stringify(settings));
     return true;
   } catch {
     return false;

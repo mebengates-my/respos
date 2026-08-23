@@ -28,7 +28,7 @@ import HeldOrdersModal from './HeldOrdersModal';
 
 export default function OrderPanel() {
   const { state, actions } = useApp();
-  const { currentOrder, selectedTable, taxRate, discountPresets: presets, heldOrders, currentUser, language } = state;
+  const { currentOrder, selectedTable, taxRate, taxEnabled, discountPresets: presets, heldOrders, currentUser, language } = state;
   const confirm = useConfirm();
   const [showDiscounts, setShowDiscounts] = useState(false);
   const [showNotes, setShowNotes] = useState(false);
@@ -263,12 +263,15 @@ export default function OrderPanel() {
             </div>
           )}
           
-          <div className="flex justify-between text-sm text-medium-roast">
-            <span>Tax ({(taxRate * 100).toFixed(0)}%)</span>
-            <span className="font-mono">
-              {currentOrder ? formatPrice(currentOrder.tax) : 'RM 0.00'}
-            </span>
-          </div>
+          {/* Tax can be switched off entirely in Admin → Settings. */}
+          {taxEnabled !== false && (
+            <div className="flex justify-between text-sm text-medium-roast">
+              <span>Tax ({(taxRate * 100).toFixed(0)}%)</span>
+              <span className="font-mono">
+                {currentOrder ? formatPrice(currentOrder.tax) : 'RM 0.00'}
+              </span>
+            </div>
+          )}
           
           <div className="flex justify-between text-lg font-bold text-dark-roast pt-2 border-t border-latte/30">
             <span>Total</span>
