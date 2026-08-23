@@ -19,6 +19,9 @@ export const defaultStoreSettings = {
   receiptHeader: 'Your Daily Dose of Happiness',
   printerType: '80mm', // 80mm or 58mm thermal printer
   autoPrintReceipt: false,
+  // Default on: servers can view and maintain every table/walk-in order.
+  // Turn off to restrict each server to orders created by their own account.
+  serverCanViewAllOrders: true,
 };
 
 // Load settings from localStorage

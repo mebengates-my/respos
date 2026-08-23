@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import { useApp } from '../context/AppContext';
 import { formatPrice } from '../utils/helpers';
-import { t } from '../data/language';
 import {
   ShoppingCart,
   Trash2,
@@ -13,32 +12,79 @@ import {
   Banknote,
   Smartphone,
   Pause,
-  Play,
   X,
   Percent,
-  AlertCircle,
-  Gift,
-  RotateCcw,
-  Info
+  Send,
+  LoaderCircle
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { discountPresets } from '../data/menuData';
 import { useConfirm } from './ConfirmDialog';
 import HeldOrdersModal from './HeldOrdersModal';
+import { visibleOpenOrders } from '../utils/orderAccess';
 
 export default function OrderPanel() {
   const { state, actions } = useApp();
-  const { currentOrder, selectedTable, taxRate, taxEnabled, discountPresets: presets, heldOrders, currentUser, language } = state;
+  const {
+    currentOrder,
+    selectedTable,
+    taxRate,
+    taxEnabled,
+    discountPresets: presets,
+    heldOrders,
+    openOrders,
+    tables,
+    currentUser,
+  } = state;
   const confirm = useConfirm();
   const [showDiscounts, setShowDiscounts] = useState(false);
   const [showNotes, setShowNotes] = useState(false);
   const [noteText, setNoteText] = useState('');
   const [showHeldOrders, setShowHeldOrders] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   
   // Servers only take orders — collecting money is reserved for Admin/Manager.
   const isServer = currentUser?.role === 'server';
   
   const isEmpty = !currentOrder || currentOrder.items.length === 0;
+  const accessibleOpenOrders = visibleOpenOrders(state);
+
+  React.useEffect(() => {
+    setNoteText(currentOrder?.notes || '');
+  }, [currentOrder?.id, currentOrder?.notes]);
+
+  const handleTableChange = (event) => {
+    const tableId = event.target.value;
+    const table = tables.find(item => item.id === tableId)
+      || tables.find(item => item.isCounter)
+      || null;
+    // Dining tables have one open order. Choosing an occupied table opens that
+    // order for editing instead of silently creating a duplicate.
+    const existing = tableId === 'COUNTER'
+      ? null
+      : accessibleOpenOrders.find(order => order.tableId === tableId);
+    if (existing && existing.id !== currentOrder?.id) {
+      if (currentOrder?.items?.length) {
+        actions.addToast('Place or clear the current order before opening another table.', 'error');
+        return;
+      }
+      actions.editOpenOrder(existing);
+      return;
+    }
+    actions.selectTable(table);
+  };
+
+  const handlePlaceOrder = async () => {
+    if (isEmpty || isSubmitting) return;
+    setIsSubmitting(true);
+    const wasEditing = Boolean(currentOrder?.isEditing || openOrders.some(order => order.id === currentOrder?.id));
+    const result = await actions.placeOrder();
+    setIsSubmitting(false);
+    if (result.ok) {
+      actions.addToast(wasEditing ? 'Order updated' : 'Order placed', 'success');
+    } else {
+      actions.addToast(result.error?.message || 'Could not place order', 'error');
+    }
+  };
   
   const handleClearOrder = async () => {
     if (currentOrder && currentOrder.items.length > 0) {
@@ -93,15 +139,17 @@ export default function OrderPanel() {
             </div>
             <div>
               <h2 className="font-semibold text-dark-roast">
-                {selectedTable?.isCounter ? 'Counter Order' : `Table ${selectedTable?.number || ''}`}
+                {selectedTable?.isCounter || !selectedTable
+                  ? 'Walk-in customer'
+                  : `Table ${selectedTable.number}`}
               </h2>
               <p className="text-xs text-medium-roast">
-                {currentOrder?.id || 'No active order'}
+                {currentOrder?.isEditing ? 'Editing placed order' : (currentOrder?.id || 'New order')}
               </p>
             </div>
           </div>
           
-          {heldOrders.length > 0 && (
+          {!isServer && heldOrders.length > 0 && (
             <button
               onClick={() => setShowHeldOrders(true)}
               className="flex items-center gap-1.5 px-3 py-2 bg-warning/10 text-warning rounded-lg text-sm font-medium hover:bg-warning/20 transition-colors btn-press"
@@ -132,6 +180,32 @@ export default function OrderPanel() {
               </button>
             </div>
           )}
+        </div>
+
+        {/* The location is selected before items are placed. Walk-in is the
+            default; choosing an occupied table opens its current order. */}
+        <div className="mt-3">
+          <label htmlFor="order-table" className="block text-xs font-semibold text-medium-roast mb-1.5 uppercase tracking-wider">
+            Order for
+          </label>
+          <select
+            id="order-table"
+            value={selectedTable?.id || 'COUNTER'}
+            onChange={handleTableChange}
+            className="w-full px-3 py-2.5 bg-white border border-latte/30 rounded-xl text-sm font-semibold text-dark-roast focus:outline-none focus:border-accent"
+          >
+            <option value="COUNTER">Walk-in customer</option>
+            {tables.filter(table => !table.isCounter).map(table => {
+              const existing = accessibleOpenOrders.find(order => order.tableId === table.id);
+              const unavailable = table.status === 'reserved' || table.status === 'cleaning'
+                || (table.status === 'occupied' && !existing && currentOrder?.tableId !== table.id);
+              return (
+                <option key={table.id} value={table.id} disabled={unavailable}>
+                  Table {table.number}{existing ? ' — open order' : unavailable ? ` — ${table.status}` : ''}
+                </option>
+              );
+            })}
+          </select>
         </div>
         
         {/* Notes input */}
@@ -178,11 +252,10 @@ export default function OrderPanel() {
         ) : (
           <div className="space-y-3">
             <AnimatePresence mode="popLayout">
-              {currentOrder.items.map((item, index) => (
+              {currentOrder.items.map(item => (
                 <OrderItemRow
                   key={item.id}
                   item={item}
-                  index={index}
                   onUpdate={(updates) => actions.updateItem(item.id, updates)}
                   onRemove={() => actions.removeItem(item.id)}
                 />
@@ -298,51 +371,66 @@ export default function OrderPanel() {
           </button>
         )}
         
-        {/* Action buttons */}
-        <div className="grid grid-cols-3 gap-2 mb-3">
-          <button
-            onClick={() => setShowDiscounts(!showDiscounts)}
-            disabled={isEmpty}
-            className={`flex items-center justify-center gap-1 px-3 py-3 rounded-xl font-medium transition-colors btn-press ${
-              isEmpty
-                ? 'bg-latte/20 text-latte cursor-not-allowed'
-                : 'bg-latte/10 text-espresso hover:bg-latte/20'
-            }`}
-          >
-            <Percent className="w-4 h-4" />
-          </button>
-          
-          <button
-            onClick={handleHoldOrder}
-            disabled={isEmpty}
-            className={`flex items-center justify-center gap-1 px-3 py-3 rounded-xl font-medium transition-colors btn-press ${
-              isEmpty
-                ? 'bg-latte/20 text-latte cursor-not-allowed'
-                : 'bg-warning/10 text-warning hover:bg-warning/20'
-            }`}
-          >
-            <Pause className="w-4 h-4" />
-          </button>
-          
-          <button
-            onClick={handleVoidOrder}
-            disabled={isEmpty}
-            className={`flex items-center justify-center gap-1 px-3 py-3 rounded-xl font-medium transition-colors btn-press ${
-              isEmpty
-                ? 'bg-latte/20 text-latte cursor-not-allowed'
-                : 'bg-error/10 text-error hover:bg-error/20'
-            }`}
-          >
-            <X className="w-4 h-4" />
-          </button>
-        </div>
-        
-        {/* Payment buttons — hidden for servers, who only take orders */}
-        {isServer ? (
-          <div className="flex items-start gap-2 px-4 py-3 bg-latte/10 rounded-xl text-sm text-medium-roast">
-            <Info className="w-4 h-4 mt-0.5 shrink-0" />
-            <span>{t('serverNoPayment', language)}</span>
+        {/* Hold/void tools are for managers. Servers submit with the clear,
+            explicit Place Order button below. */}
+        {!isServer && (
+          <div className="grid grid-cols-3 gap-2 mb-3">
+            <button
+              onClick={() => setShowDiscounts(!showDiscounts)}
+              disabled={isEmpty}
+              className={`flex items-center justify-center gap-1 px-3 py-3 rounded-xl font-medium transition-colors btn-press ${
+                isEmpty
+                  ? 'bg-latte/20 text-latte cursor-not-allowed'
+                  : 'bg-latte/10 text-espresso hover:bg-latte/20'
+              }`}
+            >
+              <Percent className="w-4 h-4" />
+            </button>
+            <button
+              onClick={handleHoldOrder}
+              disabled={isEmpty}
+              className={`flex items-center justify-center gap-1 px-3 py-3 rounded-xl font-medium transition-colors btn-press ${
+                isEmpty
+                  ? 'bg-latte/20 text-latte cursor-not-allowed'
+                  : 'bg-warning/10 text-warning hover:bg-warning/20'
+              }`}
+            >
+              <Pause className="w-4 h-4" />
+            </button>
+            <button
+              onClick={handleVoidOrder}
+              disabled={isEmpty}
+              className={`flex items-center justify-center gap-1 px-3 py-3 rounded-xl font-medium transition-colors btn-press ${
+                isEmpty
+                  ? 'bg-latte/20 text-latte cursor-not-allowed'
+                  : 'bg-error/10 text-error hover:bg-error/20'
+              }`}
+            >
+              <X className="w-4 h-4" />
+            </button>
           </div>
+        )}
+
+        {/* Servers place/update an unpaid order; managers receive it live. */}
+        {isServer ? (
+          <button
+            onClick={handlePlaceOrder}
+            disabled={isEmpty || isSubmitting}
+            className={`w-full flex items-center justify-center gap-2 px-4 py-4 rounded-xl font-semibold text-lg transition-all btn-press ${
+              isEmpty || isSubmitting
+                ? 'bg-latte/30 text-latte cursor-not-allowed'
+                : 'bg-accent text-white hover:bg-accent/90 shadow-lg shadow-accent/30'
+            }`}
+          >
+            {isSubmitting
+              ? <LoaderCircle className="w-5 h-5 animate-spin" />
+              : <Send className="w-5 h-5" />}
+            {isSubmitting
+              ? 'Placing…'
+              : currentOrder?.isEditing || openOrders.some(order => order.id === currentOrder?.id)
+                ? 'Update Order'
+                : 'Place Order'}
+          </button>
         ) : (
           <div className="grid grid-cols-3 gap-2">
             <button
@@ -408,7 +496,7 @@ function EmptyOrderState() {
   );
 }
 
-function OrderItemRow({ item, index, onUpdate, onRemove }) {
+function OrderItemRow({ item, onUpdate, onRemove }) {
   const modifierTotal = (item.modifiers || []).reduce((sum, m) => sum + m.price, 0);
   const itemTotal = (item.price + modifierTotal) * item.quantity;
   

@@ -30,6 +30,14 @@ create table if not exists public.stores (
 alter table public.stores add column if not exists slug text;
 create unique index if not exists idx_stores_slug on public.stores (slug);
 
+-- Operational settings are shared by every device. Existing stores default to
+-- allowing servers to see all open orders until an Admin/Manager turns it off.
+alter table public.stores alter column settings
+  set default '{"serverCanViewAllOrders": true}'::jsonb;
+update public.stores
+set settings = jsonb_set(coalesce(settings, '{}'::jsonb), '{serverCanViewAllOrders}', 'true'::jsonb)
+where not (coalesce(settings, '{}'::jsonb) ? 'serverCanViewAllOrders');
+
 -- ---------- Profiles (one per authenticated user) ----------
 create table if not exists public.profiles (
   id uuid primary key references auth.users(id) on delete cascade,
@@ -105,6 +113,7 @@ create table if not exists public.orders (
   discount_cents int not null default 0,
   total_cents int not null default 0,
   notes text,
+  server_name text not null default '',
   payment_method text check (payment_method in ('cash','card','ewallet')),
   amount_paid_cents int,
   change_cents int,
@@ -116,6 +125,9 @@ create table if not exists public.orders (
 );
 
 -- ---------- Expenses ----------
+-- Safe migration for projects created before server attribution was stored.
+alter table public.orders add column if not exists server_name text not null default '';
+
 create table if not exists public.expense_categories (
   id uuid primary key default gen_random_uuid(),
   store_id uuid not null references public.stores(id) on delete cascade,
@@ -141,6 +153,10 @@ create index if not exists idx_menu_items_cat on public.menu_items (category_id)
 create index if not exists idx_tables_store on public.dining_tables (store_id);
 create index if not exists idx_orders_store_status on public.orders (store_id, status);
 create index if not exists idx_orders_paid_at on public.orders (store_id, paid_at);
+-- A dining table can have only one unpaid order; walk-ins can have many.
+create unique index if not exists idx_one_open_order_per_table
+  on public.orders (store_id, table_ref)
+  where status in ('open', 'held') and table_ref is not null and table_ref <> 'COUNTER';
 create index if not exists idx_exp_cat_store on public.expense_categories (store_id);
 create index if not exists idx_expenses_store_date on public.expenses (store_id, occurred_at);
 
@@ -171,6 +187,40 @@ language sql security definer stable set search_path = public as $$
       and role = 'admin' and active = true
   )
 $$;
+
+-- Admins and Managers may change this one operational switch without giving a
+-- Manager broad UPDATE access to the stores table.
+create or replace function public.set_server_order_visibility(p_store_id uuid, p_enabled boolean)
+returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare
+  updated_settings jsonb;
+begin
+  if not exists (
+    select 1 from public.store_members
+    where store_id = p_store_id
+      and profile_id = auth.uid()
+      and active = true
+      and role in ('admin', 'manager')
+  ) then
+    raise exception 'Only an Admin or Manager can change server order access';
+  end if;
+
+  update public.stores
+  set settings = jsonb_set(
+    coalesce(settings, '{}'::jsonb),
+    '{serverCanViewAllOrders}',
+    to_jsonb(coalesce(p_enabled, true))
+  )
+  where id = p_store_id
+  returning settings into updated_settings;
+
+  return updated_settings;
+end;
+$$;
+
+revoke execute on function public.set_server_order_visibility(uuid, boolean) from public, anon;
+grant execute on function public.set_server_order_visibility(uuid, boolean) to authenticated;
 
 -- ============================================================
 -- Store slugs: "My Café" → respos-five.vercel.app/my-cafe
@@ -443,13 +493,15 @@ alter table public.orders enable row level security;
 alter table public.expense_categories enable row level security;
 alter table public.expenses enable row level security;
 
--- Stores: members read; admins update/delete
+-- Stores: members read; Admins update the full store row. Managers change only
+-- the server-order visibility key through set_server_order_visibility().
 drop policy if exists "stores_select" on public.stores;
 create policy "stores_select" on public.stores for select
   using (id in (select public.my_store_ids()));
 drop policy if exists "stores_update" on public.stores;
 create policy "stores_update" on public.stores for update
-  using (public.is_store_admin(id));
+  using (public.is_store_admin(id))
+  with check (public.is_store_admin(id));
 drop policy if exists "stores_delete" on public.stores;
 create policy "stores_delete" on public.stores for delete
   using (public.is_store_admin(id));
@@ -507,17 +559,69 @@ drop policy if exists "tables_delete" on public.dining_tables;
 create policy "tables_delete" on public.dining_tables for delete
   using (store_id in (select public.my_managing_store_ids()));
 
--- Orders: every member can read & create (servers take orders);
--- managers+ update (payments, holds) and delete
+-- Orders:
+-- * Admins/Managers can read and update every order in their store.
+-- * Servers can always create orders and maintain their own open orders.
+-- * When stores.settings.serverCanViewAllOrders is true (the default), servers
+--   can also read/maintain other servers' open table and walk-in orders.
+-- * Servers can never mark an order paid; payment remains manager-only.
 drop policy if exists "orders_select" on public.orders;
 create policy "orders_select" on public.orders for select
-  using (store_id in (select public.my_store_ids()));
+  using (
+    store_id in (select public.my_managing_store_ids())
+    or (
+      store_id in (select public.my_store_ids())
+      and (
+        created_by = auth.uid()
+        or coalesce(
+          (select (s.settings ->> 'serverCanViewAllOrders')::boolean
+           from public.stores s where s.id = public.orders.store_id),
+          true
+        )
+      )
+    )
+  );
+
 drop policy if exists "orders_insert" on public.orders;
 create policy "orders_insert" on public.orders for insert
-  with check (store_id in (select public.my_store_ids()));
+  with check (
+    store_id in (select public.my_managing_store_ids())
+    or (store_id in (select public.my_store_ids()) and created_by = auth.uid())
+  );
+
 drop policy if exists "orders_update" on public.orders;
 create policy "orders_update" on public.orders for update
-  using (store_id in (select public.my_managing_store_ids()));
+  using (
+    store_id in (select public.my_managing_store_ids())
+    or (
+      status in ('open', 'held')
+      and store_id in (select public.my_store_ids())
+      and (
+        created_by = auth.uid()
+        or coalesce(
+          (select (s.settings ->> 'serverCanViewAllOrders')::boolean
+           from public.stores s where s.id = public.orders.store_id),
+          true
+        )
+      )
+    )
+  )
+  with check (
+    store_id in (select public.my_managing_store_ids())
+    or (
+      status in ('open', 'held', 'voided')
+      and store_id in (select public.my_store_ids())
+      and (
+        created_by = auth.uid()
+        or coalesce(
+          (select (s.settings ->> 'serverCanViewAllOrders')::boolean
+           from public.stores s where s.id = public.orders.store_id),
+          true
+        )
+      )
+    )
+  );
+
 drop policy if exists "orders_delete" on public.orders;
 create policy "orders_delete" on public.orders for delete
   using (store_id in (select public.my_managing_store_ids()));
@@ -549,6 +653,9 @@ begin
   end if;
   begin
     alter publication supabase_realtime add table public.orders;
+  exception when duplicate_object then null; end;
+  begin
+    alter publication supabase_realtime add table public.stores;
   exception when duplicate_object then null; end;
   begin
     alter publication supabase_realtime add table public.dining_tables;

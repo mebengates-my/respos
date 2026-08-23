@@ -20,9 +20,10 @@ npm run preview
 
 - **Roles:** there are three roles —
   - **Admin:** full management panel (users, categories, menu items, tables, reports, open orders, expenses, profit & loss, settings). Only admins can add servers, managers, or other admins.
-  - **Manager:** everything an admin can see and do *except* User Management and Settings — dashboard, open orders (live), categories, menu items, tables, reports, expenses, and profit & loss. Managers land in the Manager Panel after login.
-  - **Server:** POS order taking only. Servers have no Reports tab and no Cash/Card/E-Wallet payment buttons — collecting money is reserved for Admin/Manager.
+  - **Manager:** everything an admin can see and do *except* User Management — dashboard, open orders (live), categories, menu items, tables, reports, expenses, profit & loss, and operational settings. Managers land in the Manager Panel after login.
+  - **Server:** table/walk-in order taking only. Walk-in is selected by default; servers select a table when needed, add items, then press **Place Order**. Servers have no Reports tab and no Cash/Card/E-Wallet payment buttons — collecting money is reserved for Admin/Manager.
 - **Admin landing page:** an admin or manager login opens the management panel, with **Dashboard** selected by default.
+- **Server open-order workflow:** placing an order clears the server's draft for the next customer and publishes it to Admin/Manager → Open Orders. Servers have a **Current Orders** view where they can reopen an allowed table or walk-in order and add, change, or remove items. Admin/Manager → Settings controls whether servers see all open orders (default) or only their own.
 - **Bangladesh menu:** categories and menu items share stable category IDs. The app migrates older browser caches that contained legacy categories but no matching menu items to the current Bangladesh menu.
 - **Refresh and login:** the signed-in user's session is stored in browser storage (user id only), so a browser refresh keeps the user logged in. The id is re-checked against the saved users list on load — a deleted or deactivated user is not restored. Logging out clears the session on every open tab of the device.
 - **Report export:** report views (Admin Panel and Reports) export a real PDF built with jsPDF.
@@ -46,6 +47,8 @@ is scaffolded and the first online features are built:
 - **Multi-tenant schema + RLS** (`supabase/schema.sql`) — stores, profiles,
   store_members, menu, tables, orders and expenses, all scoped by `store_id`,
   with `register_store()` for owner sign-up and realtime on orders/tables.
+  Submitted server orders sync through Supabase to management devices; order
+  visibility and edit permissions follow the shared store setting.
 - **Cloud client** (`src/services/cloud.js`) — a `cloudAuth` facade over
   Supabase Auth + store membership. When `VITE_SUPABASE_URL` /
   `VITE_SUPABASE_ANON_KEY` are set it talks to your real Supabase project;
@@ -77,7 +80,7 @@ vars. See `docs/SAAS.md` for the full guide.
 
 ## Important production requirement: shared users and cloud sync
 
-This repository is currently a client-only application. `localStorage` is private to one browser profile, so it **does not provide shared real-time data for employees on separate phones, tablets, or computers**. It also has no remote destination to which offline changes can automatically sync.
+This repository is still client-first. With Supabase enabled, authentication, submitted open orders, and the server-order access setting are shared in real time. Menu configuration, reports, expenses, and some table state still use `localStorage`, which is private to one browser profile and does **not** fully synchronize separate phones, tablets, or computers. Offline cloud changes also do not yet have an automatic outbox.
 
 Note that a local SQLite file would **not** solve this either — it would still live (and die) on the same machine. Protection against device loss requires data to exist somewhere off the device: either the manual Backup & Restore file above, or a shared backend.
 

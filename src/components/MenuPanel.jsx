@@ -76,7 +76,6 @@ export default function MenuPanel() {
                     actions.openModifierModal(item);
                   } else {
                     actions.addItem(item, [], 1, '');
-                    actions.addToast(`Added ${item.name}`, 'success');
                   }
                 }}
                 disabled={!item.available}
