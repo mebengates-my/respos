@@ -79,8 +79,11 @@ export default function AdminPanel() {
   const confirm = useConfirm();
   const { language, users, currentUser } = state;
   const isManager = currentUser?.role === 'manager';
-  // Start every management session on the operational overview rather than Settings.
-  const [currentView, setCurrentView] = useState(AdminViews.DASHBOARD);
+  // Managers run the floor, so their panel opens straight on the live open-orders
+  // board — the list they act on all shift. Admins still land on the Dashboard.
+  const [currentView, setCurrentView] = useState(
+    isManager ? AdminViews.OPEN_ORDERS : AdminViews.DASHBOARD
+  );
 
   // Cloud (Supabase) mode: staff are real auth users, not the local demo list.
   // Fetch the store roster once so Dashboard and User Management show the truth

@@ -1262,7 +1262,40 @@ export function AppProvider({ children }) {
       return () => clearTimeout(timeoutId);
     }
   }, [state.toasts]);
-  
+
+  // Remove a *placed* (submitted, unpaid) order everywhere: the shared cloud
+  // row, the open-orders board and the floor plan. Used by every "remove this
+  // order" affordance — the board's cancel button, and the POS clear/void
+  // buttons while a manager has a placed order open for editing. Voiding is
+  // deliberately a soft delete: the order lands in history as `voided` so the
+  // reports still show what was thrown away and by whom.
+  const removePlacedOrder = useCallback(async (order) => {
+    if (!order) return { ok: false, error: { message: 'Order not found' } };
+    const stored = state.openOrders.find(item => item.id === order.id) || order;
+    const storeId = state.currentUser?.storeId || state.cloudSession?.storeId;
+    let cancelled = {
+      ...stored,
+      cloudId: stored.cloudId || order.cloudId,
+      status: 'voided',
+      voidedAt: Date.now(),
+      voidedBy: state.currentUser?.name,
+    };
+    if (isCloudEnabled && state.currentUser?.cloud && storeId) {
+      const { data, error } = await cloudOrders.void({ storeId, order: cancelled });
+      // Without the cloud write the row would reappear on the next realtime
+      // refresh, so a failure must stop the local removal too.
+      if (error) return { ok: false, error };
+      cancelled = {
+        ...cancelled,
+        ...data,
+        serverName: stored.serverName || order.serverName,
+        voidedBy: state.currentUser?.name,
+      };
+    }
+    dispatch({ type: ACTIONS.CANCEL_OPEN_ORDER, payload: cancelled });
+    return { ok: true };
+  }, [state.openOrders, state.currentUser, state.cloudSession]);
+
   // Action creators
   const actions = {
     // Auth
@@ -1448,9 +1481,20 @@ export function AppProvider({ children }) {
       dispatch({ type: ACTIONS.REMOVE_ITEM, payload: itemId } );
     }, []),
     
-    clearOrder: useCallback(() => {
-      dispatch({ type: ACTIONS.CLEAR_ORDER });
-    }, []),
+    // Clearing a *draft* only wipes this screen. Clearing an order that was
+    // already placed must also take it off the open-orders board (and out of
+    // the shared cloud store) — otherwise the order the manager just cleared
+    // keeps sitting there as unpaid work.
+    clearOrder: useCallback(async () => {
+      const draft = state.currentOrder;
+      const placed = draft && state.openOrders.some(order => order.id === draft.id);
+      if (!placed) {
+        dispatch({ type: ACTIONS.CLEAR_ORDER });
+        return { ok: true, removed: false };
+      }
+      const result = await removePlacedOrder(draft);
+      return result.ok ? { ok: true, removed: true } : result;
+    }, [state.currentOrder, state.openOrders, removePlacedOrder]),
     
     applyDiscount: useCallback((discount) => {
       dispatch({ type: ACTIONS.APPLY_DISCOUNT, payload: discount });
@@ -1516,18 +1560,17 @@ export function AppProvider({ children }) {
       dispatch({ type: ACTIONS.EDIT_OPEN_ORDER, payload: order });
     }, []),
 
-    cancelOpenOrder: useCallback(async (order) => {
-      if (!order) return { ok: false, error: { message: 'Order not found' } };
-      const storeId = state.currentUser?.storeId || state.cloudSession?.storeId;
-      let cancelled = { ...order, status: 'voided', voidedAt: Date.now() };
-      if (isCloudEnabled && state.currentUser?.cloud && storeId) {
-        const { data, error } = await cloudOrders.void({ storeId, order });
-        if (error) return { ok: false, error };
-        cancelled = { ...cancelled, ...data, serverName: order.serverName };
-      }
-      dispatch({ type: ACTIONS.CANCEL_OPEN_ORDER, payload: cancelled });
-      return { ok: true };
-    }, [state.currentUser, state.cloudSession]),
+    // Remove a placed (unpaid) order from the board for good.
+    cancelOpenOrder: useCallback((order) => removePlacedOrder(order), [removePlacedOrder]),
+
+    // Open a placed order in the POS and jump straight to the payment screen.
+    // Managers/admins use this from the open-orders board to collect money
+    // without re-keying the order.
+    collectPaymentForOrder: useCallback((order) => {
+      if (!order) return;
+      dispatch({ type: ACTIONS.EDIT_OPEN_ORDER, payload: order });
+      dispatch({ type: ACTIONS.SET_PAYMENT_MODAL, payload: { open: true, method: null } });
+    }, []),
     
     processPayment: useCallback((method, amountPaid, change) => {
       const order = state.currentOrder;
@@ -1546,13 +1589,18 @@ export function AppProvider({ children }) {
       }
     }, [state.currentOrder, state.currentUser, state.cloudSession]),
     
-    voidOrder: useCallback(() => {
-      if (state.currentOrder) {
-        dispatch({ type: ACTIONS.VOID_ORDER });
-        return true;
+    // Void the order on screen. A placed order goes through the shared path so
+    // the board and the cloud row are cleared as well; an unsubmitted draft
+    // only exists on this device and is voided locally.
+    voidOrder: useCallback(async () => {
+      const draft = state.currentOrder;
+      if (!draft) return { ok: false, error: { message: 'No order to void' } };
+      if (state.openOrders.some(order => order.id === draft.id)) {
+        return removePlacedOrder(draft);
       }
-      return false;
-    }, [state.currentOrder]),
+      dispatch({ type: ACTIONS.VOID_ORDER });
+      return { ok: true };
+    }, [state.currentOrder, state.openOrders, removePlacedOrder]),
     
     // Modals
     openPaymentModal: useCallback((method = null) => {

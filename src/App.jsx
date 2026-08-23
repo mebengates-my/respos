@@ -67,7 +67,9 @@ function MainContent() {
       <main className="flex-1 flex overflow-hidden bg-cream">
         {view === 'pos' && <POSView />}
         {view === 'tables' && <TableView />}
-        {view === 'orders' && currentUser?.role === 'server' && <CurrentOrders />}
+        {/* Open orders is for everyone who works the floor: servers track their
+            own tickets, managers/admins pick one up and take the payment. */}
+        {view === 'orders' && <CurrentOrders />}
         {view === 'reports' && canManage && <Reports />}
         {view === 'settings' && <Settings />}
       </main>

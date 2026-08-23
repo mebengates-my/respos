@@ -95,18 +95,27 @@ export default function OrderPanel() {
     }
   };
   
+  // Once an order has been placed it lives on the open-orders board, so
+  // clearing it is a removal that everybody sees — say so in the prompt.
+  const isPlacedOrder = Boolean(currentOrder && openOrders.some(order => order.id === currentOrder.id));
+
   const handleClearOrder = async () => {
     if (currentOrder && currentOrder.items.length > 0) {
       const ok = await confirm({
-        title: 'Clear order?',
-        message: 'Clear all items from this order? This cannot be undone.',
-        confirmLabel: 'Clear',
+        title: isPlacedOrder ? 'Remove placed order?' : 'Clear order?',
+        message: isPlacedOrder
+          ? 'This order has already been placed. Removing it takes it off the open orders list for everyone. This cannot be undone.'
+          : 'Clear all items from this order? This cannot be undone.',
+        confirmLabel: isPlacedOrder ? 'Remove order' : 'Clear',
         danger: true,
       });
-      if (ok) {
-        actions.clearOrder();
-        actions.addToast('Order cleared', 'info');
+      if (!ok) return;
+      const result = await actions.clearOrder();
+      if (result?.ok === false) {
+        actions.addToast(result.error?.message || 'Could not clear order', 'error');
+        return;
       }
+      actions.addToast(result?.removed ? 'Order removed from open orders' : 'Order cleared', 'info');
     }
   };
   
@@ -114,14 +123,19 @@ export default function OrderPanel() {
     if (currentOrder && currentOrder.items.length > 0) {
       const ok = await confirm({
         title: 'Void order?',
-        message: 'Void this entire order?',
+        message: isPlacedOrder
+          ? 'Void this order and remove it from the open orders list?'
+          : 'Void this entire order?',
         confirmLabel: 'Void',
         danger: true,
       });
-      if (ok) {
-        actions.voidOrder();
-        actions.addToast('Order voided', 'error');
+      if (!ok) return;
+      const result = await actions.voidOrder();
+      if (result?.ok === false) {
+        actions.addToast(result.error?.message || 'Could not void order', 'error');
+        return;
       }
+      actions.addToast('Order voided', 'error');
     }
   };
   
@@ -182,13 +196,17 @@ export default function OrderPanel() {
               >
                 <StickyNote className="w-5 h-5" />
               </button>
-              <button
-                onClick={handleClearOrder}
-                className="p-2 rounded-lg hover:bg-error/10 text-medium-roast hover:text-error transition-colors"
-                title="Clear order"
-              >
-                <Trash2 className="w-5 h-5" />
-              </button>
+              {/* Removing an order that is already on the board is an
+                  Admin/Manager authority; servers may only clear their draft. */}
+              {(!isPlacedOrder || !isServer) && (
+                <button
+                  onClick={handleClearOrder}
+                  className="p-2 rounded-lg hover:bg-error/10 text-medium-roast hover:text-error transition-colors"
+                  title={isPlacedOrder ? 'Remove placed order' : 'Clear order'}
+                >
+                  <Trash2 className="w-5 h-5" />
+                </button>
+              )}
             </div>
           )}
         </div>
