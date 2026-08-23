@@ -4,6 +4,11 @@
 -- Run once in: Supabase Dashboard → SQL Editor → New query → Run
 -- Every row below is scoped to a store (tenant). Row Level
 -- Security guarantees one store can never read/write another.
+--
+-- The whole file is IDEMPOTENT: safe to re-run any number of
+-- times, including on a project that already has stores and
+-- orders (policies are dropped and recreated, existing data is
+-- never touched).
 -- ============================================================
 
 -- ---------- Stores (tenants) ----------
@@ -439,72 +444,97 @@ alter table public.expense_categories enable row level security;
 alter table public.expenses enable row level security;
 
 -- Stores: members read; admins update/delete
+drop policy if exists "stores_select" on public.stores;
 create policy "stores_select" on public.stores for select
   using (id in (select public.my_store_ids()));
+drop policy if exists "stores_update" on public.stores;
 create policy "stores_update" on public.stores for update
   using (public.is_store_admin(id));
+drop policy if exists "stores_delete" on public.stores;
 create policy "stores_delete" on public.stores for delete
   using (public.is_store_admin(id));
 
 -- Profiles: any signed-in user can read basic names; update own
+drop policy if exists "profiles_select" on public.profiles;
 create policy "profiles_select" on public.profiles for select
   to authenticated using (true);
+drop policy if exists "profiles_update_own" on public.profiles;
 create policy "profiles_update_own" on public.profiles for update
   using (id = auth.uid());
 
 -- Memberships: members read; admins manage
+drop policy if exists "members_select" on public.store_members;
 create policy "members_select" on public.store_members for select
   using (store_id in (select public.my_store_ids()));
+drop policy if exists "members_insert" on public.store_members;
 create policy "members_insert" on public.store_members for insert
   with check (public.is_store_admin(store_id));
+drop policy if exists "members_update" on public.store_members;
 create policy "members_update" on public.store_members for update
   using (public.is_store_admin(store_id));
+drop policy if exists "members_delete" on public.store_members;
 create policy "members_delete" on public.store_members for delete
   using (public.is_store_admin(store_id));
 
 -- Menu: members read; managers+ write
+drop policy if exists "menu_cat_select" on public.menu_categories;
 create policy "menu_cat_select" on public.menu_categories for select
   using (store_id in (select public.my_store_ids()));
+drop policy if exists "menu_cat_write" on public.menu_categories;
 create policy "menu_cat_write" on public.menu_categories for all
   using (store_id in (select public.my_managing_store_ids()))
   with check (store_id in (select public.my_managing_store_ids()));
 
+drop policy if exists "menu_items_select" on public.menu_items;
 create policy "menu_items_select" on public.menu_items for select
   using (store_id in (select public.my_store_ids()));
+drop policy if exists "menu_items_write" on public.menu_items;
 create policy "menu_items_write" on public.menu_items for all
   using (store_id in (select public.my_managing_store_ids()))
   with check (store_id in (select public.my_managing_store_ids()));
 
 -- Tables: members read & update status; managers+ add/remove
+drop policy if exists "tables_select" on public.dining_tables;
 create policy "tables_select" on public.dining_tables for select
   using (store_id in (select public.my_store_ids()));
+drop policy if exists "tables_update" on public.dining_tables;
 create policy "tables_update" on public.dining_tables for update
   using (store_id in (select public.my_store_ids()));
+drop policy if exists "tables_insert" on public.dining_tables;
 create policy "tables_insert" on public.dining_tables for insert
   with check (store_id in (select public.my_managing_store_ids()));
+drop policy if exists "tables_delete" on public.dining_tables;
 create policy "tables_delete" on public.dining_tables for delete
   using (store_id in (select public.my_managing_store_ids()));
 
 -- Orders: every member can read & create (servers take orders);
 -- managers+ update (payments, holds) and delete
+drop policy if exists "orders_select" on public.orders;
 create policy "orders_select" on public.orders for select
   using (store_id in (select public.my_store_ids()));
+drop policy if exists "orders_insert" on public.orders;
 create policy "orders_insert" on public.orders for insert
   with check (store_id in (select public.my_store_ids()));
+drop policy if exists "orders_update" on public.orders;
 create policy "orders_update" on public.orders for update
   using (store_id in (select public.my_managing_store_ids()));
+drop policy if exists "orders_delete" on public.orders;
 create policy "orders_delete" on public.orders for delete
   using (store_id in (select public.my_managing_store_ids()));
 
 -- Expenses: members read; managers+ write
+drop policy if exists "exp_cat_select" on public.expense_categories;
 create policy "exp_cat_select" on public.expense_categories for select
   using (store_id in (select public.my_store_ids()));
+drop policy if exists "exp_cat_write" on public.expense_categories;
 create policy "exp_cat_write" on public.expense_categories for all
   using (store_id in (select public.my_managing_store_ids()))
   with check (store_id in (select public.my_managing_store_ids()));
 
+drop policy if exists "expenses_select" on public.expenses;
 create policy "expenses_select" on public.expenses for select
   using (store_id in (select public.my_store_ids()));
+drop policy if exists "expenses_write" on public.expenses;
 create policy "expenses_write" on public.expenses for all
   using (store_id in (select public.my_managing_store_ids()))
   with check (store_id in (select public.my_managing_store_ids()));
