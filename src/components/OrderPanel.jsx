@@ -673,9 +673,11 @@ function OrderItemRow({ item, onUpdate, onRemove, canEditPrice }) {
     const parsed = Number.parseFloat(priceDraft);
     setEditingPrice(false);
     // Ignore anything that is not a usable amount and keep the current price.
-    if (!Number.isFinite(parsed) || parsed < 0) return;
+    // Zero is rejected too: a free line has to go through a discount or a
+    // void so it stays on the record, rather than being priced away here.
+    if (!Number.isFinite(parsed) || parsed <= 0) return;
     const cents = Math.round(parsed * 100);
-    if (cents === item.price) return;
+    if (cents <= 0 || cents === item.price) return;
     onUpdate({
       price: cents,
       // Restoring the menu price clears the override marker entirely.
@@ -687,6 +689,12 @@ function OrderItemRow({ item, onUpdate, onRemove, canEditPrice }) {
     setEditingPrice(false);
     onUpdate({ price: menuPrice, originalPrice: null });
   };
+
+  // Flag a bad draft while it is being typed so a rejected value explains
+  // itself instead of silently snapping back to the old price.
+  const draftNumber = Number.parseFloat(priceDraft);
+  const draftInvalid =
+    priceDraft.trim() !== '' && (!Number.isFinite(draftNumber) || draftNumber <= 0);
 
   return (
     <motion.div
@@ -780,7 +788,7 @@ function OrderItemRow({ item, onUpdate, onRemove, canEditPrice }) {
                 type="number"
                 inputMode="decimal"
                 step="0.01"
-                min="0"
+                min="0.01"
                 autoFocus
                 value={priceDraft}
                 onChange={(e) => setPriceDraft(e.target.value)}
@@ -790,9 +798,16 @@ function OrderItemRow({ item, onUpdate, onRemove, canEditPrice }) {
                   if (e.key === 'Escape') setEditingPrice(false);
                 }}
                 onBlur={commitPrice}
-                className="w-24 px-2 py-1 bg-white border border-accent/40 rounded-lg text-sm font-mono focus:outline-none focus:border-accent"
+                className={`w-24 px-2 py-1 bg-white border rounded-lg text-sm font-mono focus:outline-none ${
+                  draftInvalid
+                    ? 'border-error focus:border-error'
+                    : 'border-accent/40 focus:border-accent'
+                }`}
               />
-              {isOverridden && (
+              {draftInvalid && (
+                <span className="text-xs text-error shrink-0">Must be above 0</span>
+              )}
+              {isOverridden && !draftInvalid && (
                 <button
                   // Mouse down fires before the input's blur, so the reset is
                   // not swallowed by commitPrice closing the editor first.

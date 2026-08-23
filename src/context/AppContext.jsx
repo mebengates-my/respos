@@ -117,23 +117,22 @@ export const SESSION_STORAGE_KEY = 'cafe-pos-session';
 // id + the selected store id. Re-validated against the backend on load.
 export const CLOUD_SESSION_STORAGE_KEY = 'cafe-pos-session-cloud';
 
-// Initial users (staff)
+// Initial users (staff). One account per role so every permission path can be
+// tried on a fresh install; the owner renames these and adds their real staff
+// in Admin > Users. Keep the admin account here or a new store cannot log in.
 const defaultUsers = [
   { id: 'admin-1', name: 'Admin User', role: 'admin', pin: '1234', active: true },
-  { id: 'manager-1', name: 'Nadia Rahman', role: 'manager', pin: '5555', active: true },
-  { id: 'server-1', name: 'Maria Santos', role: 'server', pin: '1111', active: true },
-  { id: 'server-2', name: 'Ahmad Khan', role: 'server', pin: '2222', active: true },
-  { id: 'server-3', name: 'Sarah Lee', role: 'server', pin: '3333', active: true },
+  { id: 'manager-1', name: 'Manager', role: 'manager', pin: '5555', active: true },
+  { id: 'server-1', name: 'Server', role: 'server', pin: '1111', active: true },
 ];
 
-// Initial expense categories (business costs, separate from menu categories)
+// Initial expense categories (business costs, separate from menu categories).
+// A short starter set; the owner adds their own in Admin > Expenses.
 const defaultExpenseCategories = [
   { id: 'exp-cat-rent', name: 'Rent' },
   { id: 'exp-cat-salaries', name: 'Salaries' },
   { id: 'exp-cat-ingredients', name: 'Ingredients & Supplies' },
   { id: 'exp-cat-utilities', name: 'Utilities' },
-  { id: 'exp-cat-marketing', name: 'Marketing' },
-  { id: 'exp-cat-maintenance', name: 'Maintenance' },
   { id: 'exp-cat-other', name: 'Other' },
 ];
 
