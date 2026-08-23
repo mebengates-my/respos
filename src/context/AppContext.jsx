@@ -18,7 +18,7 @@ import {
   saveToStorage,
   loadFromStorage
 } from '../utils/helpers';
-import { cloudAuth, cloudOrders, buildAppUser, isCloudEnabled } from '../services/cloud';
+import { cloudAuth, cloudOrders, cloudExpenses, buildAppUser, isCloudEnabled } from '../services/cloud';
 import {
   loadStoreSettings,
   saveStoreSettings,
@@ -77,6 +77,14 @@ const ACTIONS = {
   ADD_EXPENSE: 'ADD_EXPENSE',
   UPDATE_EXPENSE: 'UPDATE_EXPENSE',
   DELETE_EXPENSE: 'DELETE_EXPENSE',
+  // Cloud sync: replace a whole collection with the shared backend's view so
+  // every device shows the same numbers (orders history, expenses, categories).
+  SET_ORDER_HISTORY: 'SET_ORDER_HISTORY',
+  SET_EXPENSES: 'SET_EXPENSES',
+  SET_EXPENSE_CATEGORIES: 'SET_EXPENSE_CATEGORIES',
+  // Swap a just-paid local order's temporary id for the durable cloud id, so a
+  // direct (un-placed) payment syncs and later edits/voids reach the backend.
+  REPLACE_HISTORY_ID: 'REPLACE_HISTORY_ID',
   
   // Orders
   ADD_ITEM: 'ADD_ITEM',
@@ -654,6 +662,24 @@ function appReducer(state, action) {
         ...state,
         expenses: state.expenses.filter(expense => expense.id !== action.payload),
       };
+
+    // Cloud is the single source of truth for these collections on a cloud
+    // store: replace, do not merge, so two devices can never drift apart.
+    case ACTIONS.SET_ORDER_HISTORY:
+      return { ...state, orderHistory: Array.isArray(action.payload) ? action.payload : [] };
+    case ACTIONS.SET_EXPENSES:
+      return { ...state, expenses: Array.isArray(action.payload) ? action.payload : [] };
+    case ACTIONS.SET_EXPENSE_CATEGORIES:
+      return { ...state, expenseCategories: Array.isArray(action.payload) ? action.payload : state.expenseCategories };
+
+    case ACTIONS.REPLACE_HISTORY_ID: {
+      const { fromId, order } = action.payload;
+      if (!fromId || !order) return state;
+      return {
+        ...state,
+        orderHistory: state.orderHistory.map(item => (item.id === fromId ? order : item)),
+      };
+    }
     
     // Orders
     case ACTIONS.ADD_ITEM: {
@@ -1178,9 +1204,54 @@ export function AppProvider({ children }) {
     let cancelled = false;
 
     const refresh = async () => {
-      const { data, error } = await cloudOrders.listOpen(storeId);
-      if (!cancelled && !error) {
-        dispatch({ type: ACTIONS.SET_OPEN_ORDERS, payload: data || [] });
+      // Open orders drive the floor + orders board; history (paid/voided)
+      // drives Reports, Today's Sales and Profit & Loss. Both come from the
+      // same `orders` table, so the realtime subscription refreshes them
+      // together whenever an order is placed, paid or voided on any device.
+      const [openRes, histRes] = await Promise.all([
+        cloudOrders.listOpen(storeId),
+        cloudOrders.listHistory(storeId),
+      ]);
+      if (!cancelled && !openRes.error) {
+        dispatch({ type: ACTIONS.SET_OPEN_ORDERS, payload: openRes.data || [] });
+      }
+      if (!cancelled && !histRes.error) {
+        let history = histRes.data || [];
+
+        // One-time migration: orders paid/voided before cloud sync existed (or
+        // paid directly without being placed) live only in this device's
+        // localStorage. Push them up to the cloud once, then the shared list
+        // becomes the single source of truth without losing any past sales.
+        const migrateKey = `cafe-pos-orders-migrated-${storeId}`;
+        if (loadFromStorage(migrateKey, false) !== true) {
+          const localState = loadFromStorage('cafe-pos-state', null);
+          const localHistory = Array.isArray(localState?.orderHistory) ? localState.orderHistory : [];
+          const toUpload = localHistory.filter(order => !order.cloudId);
+          let allUploaded = true;
+          if (toUpload.length > 0) {
+            for (const order of toUpload) {
+              const { error } = await cloudOrders.saveTerminal({ storeId, userId: state.currentUser.id, order });
+              if (error) allUploaded = false;
+            }
+          }
+          if (allUploaded) {
+            // Everything local is now in the cloud — reload and let it be truth.
+            const reloaded = await cloudOrders.listHistory(storeId);
+            if (!reloaded.error) history = reloaded.data || [];
+            saveToStorage(migrateKey, true);
+          } else {
+            // Partial failure: keep cloud plus any local entries that did not
+            // make it up, so nothing is dropped. The flag stays unset so the
+            // stranded sales are retried on the next refresh.
+            const cloudIds = new Set(history.map(order => order.id));
+            history = [
+              ...history,
+              ...localHistory.filter(order => !order.cloudId && !cloudIds.has(order.id)),
+            ];
+          }
+        }
+
+        dispatch({ type: ACTIONS.SET_ORDER_HISTORY, payload: history });
       }
     };
 
@@ -1228,6 +1299,104 @@ export function AppProvider({ children }) {
       if (!error) applySettings(data);
     });
     const unsubscribe = cloudAuth.subscribeStoreSettings(storeId, applySettings);
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, [state.currentUser?.id, state.currentUser?.cloud, state.currentUser?.storeId, state.cloudSession?.storeId]);
+
+  // Expenses and their categories are shared across devices too, so the
+  // Expenses tab and Profit & Loss match everywhere. A brand-new cloud store
+  // starts empty, so seed the default categories the first time they load.
+  useEffect(() => {
+    const storeId = state.currentUser?.storeId || state.cloudSession?.storeId;
+    if (!isCloudEnabled || !state.currentUser?.cloud || !storeId) return;
+    let cancelled = false;
+
+    const loadReporting = async () => {
+      let { data: categories, error: catError } = await cloudExpenses.listCategories(storeId);
+      if (!catError && (!categories || categories.length === 0)) {
+        await cloudExpenses.seedCategories(storeId, defaultExpenseCategories);
+        ({ data: categories, error: catError } = await cloudExpenses.listCategories(storeId));
+      }
+      if (!cancelled && !catError && Array.isArray(categories)) {
+        dispatch({ type: ACTIONS.SET_EXPENSE_CATEGORIES, payload: categories });
+      }
+
+      let { data: expenses, error: expError } = await cloudExpenses.list(storeId);
+
+      // One-time migration: expenses used to be device-local only, so the
+      // device that recorded them (typically the desktop) still holds costs the
+      // cloud has never seen. Upload them once — matching categories by name
+      // and creating any that are missing — before the cloud list takes over.
+      const migrateKey = `cafe-pos-expenses-migrated-${storeId}`;
+      if (
+        !expError &&
+        (!expenses || expenses.length === 0) &&
+        loadFromStorage(migrateKey, false) !== true &&
+        Array.isArray(categories) && categories.length > 0
+      ) {
+        const localState = loadFromStorage('cafe-pos-state', null);
+        const localExpenses = Array.isArray(localState?.expenses) ? localState.expenses : [];
+        const localCategories = Array.isArray(localState?.expenseCategories)
+          ? localState.expenseCategories
+          : [];
+        if (localExpenses.length > 0) {
+          const nameToId = new Map(
+            categories.map(cat => [String(cat.name || '').toLowerCase(), cat.id])
+          );
+          let migrationError = false;
+          for (const exp of localExpenses) {
+            const localCat = localCategories.find(cat => cat.id === exp.categoryId);
+            let cloudCatId = localCat
+              ? nameToId.get(String(localCat.name || '').toLowerCase())
+              : null;
+            if (!cloudCatId && localCat?.name) {
+              const { data: created, error: catErr } = await cloudExpenses.upsertCategory({
+                storeId,
+                category: { name: localCat.name },
+              });
+              if (catErr) migrationError = true;
+              if (created?.id) {
+                nameToId.set(String(localCat.name).toLowerCase(), created.id);
+                cloudCatId = created.id;
+              }
+            }
+            if (!cloudCatId) continue;
+            const { error: expErr } = await cloudExpenses.upsert({
+              storeId,
+              userId: state.currentUser.id,
+              expense: {
+                description: exp.description,
+                amount: exp.amount,
+                date: exp.date || exp.createdAt,
+                categoryId: cloudCatId,
+                cloudId: null,
+              },
+            });
+            if (expErr) migrationError = true;
+          }
+          // Pick up any categories we just created, plus the uploaded expenses.
+          ({ data: categories, error: catError } = await cloudExpenses.listCategories(storeId));
+          if (!cancelled && !catError) {
+            dispatch({ type: ACTIONS.SET_EXPENSE_CATEGORIES, payload: categories || [] });
+          }
+          ({ data: expenses, error: expError } = await cloudExpenses.list(storeId));
+          // Only mark migration done when it fully succeeded, so a network
+          // blip retries instead of leaving expenses stranded off the cloud.
+          if (!migrationError) saveToStorage(migrateKey, true);
+        } else {
+          saveToStorage(migrateKey, true);
+        }
+      }
+
+      if (!cancelled && !expError) {
+        dispatch({ type: ACTIONS.SET_EXPENSES, payload: expenses || [] });
+      }
+    };
+
+    loadReporting();
+    const unsubscribe = cloudExpenses.subscribe(storeId, loadReporting);
     return () => {
       cancelled = true;
       unsubscribe();
@@ -1479,29 +1648,110 @@ export function AppProvider({ children }) {
     }, []),
     
     // Expenses
-    addExpenseCategory: useCallback((data) => {
+    addExpenseCategory: useCallback(async (data) => {
+      const storeId = state.currentUser?.storeId || state.cloudSession?.storeId;
+      if (isCloudEnabled && state.currentUser?.cloud && storeId) {
+        const { data: saved, error } = await cloudExpenses.upsertCategory({
+          storeId,
+          category: { name: data.name },
+        });
+        if (error) {
+          dispatch({ type: ACTIONS.ADD_TOAST, payload: { message: `Could not add category: ${error.message}`, type: 'error' } });
+          return;
+        }
+        // Use the durable cloud id so later edits/deletes reach the backend.
+        dispatch({ type: ACTIONS.ADD_EXPENSE_CATEGORY, payload: { id: saved.id, name: saved.name } });
+        return;
+      }
       dispatch({ type: ACTIONS.ADD_EXPENSE_CATEGORY, payload: data });
-    }, []),
-    
-    updateExpenseCategory: useCallback((id, updates) => {
+    }, [state.currentUser, state.cloudSession]),
+
+    updateExpenseCategory: useCallback(async (id, updates) => {
       dispatch({ type: ACTIONS.UPDATE_EXPENSE_CATEGORY, payload: { id, updates } });
-    }, []),
-    
-    deleteExpenseCategory: useCallback((id) => {
+      const storeId = state.currentUser?.storeId || state.cloudSession?.storeId;
+      const existing = state.expenseCategories.find(category => category.id === id);
+      if (isCloudEnabled && state.currentUser?.cloud && storeId && existing?.cloudId) {
+        const { error } = await cloudExpenses.upsertCategory({
+          storeId,
+          category: { cloudId: existing.cloudId, name: updates.name ?? existing.name },
+        });
+        if (error) {
+          dispatch({ type: ACTIONS.ADD_TOAST, payload: { message: `Category updated here, but cloud sync failed: ${error.message}`, type: 'error' } });
+        }
+      }
+    }, [state.currentUser, state.cloudSession, state.expenseCategories]),
+
+    deleteExpenseCategory: useCallback(async (id) => {
+      const storeId = state.currentUser?.storeId || state.cloudSession?.storeId;
+      const existing = state.expenseCategories.find(category => category.id === id);
+      // Local reducer also clears expenses recorded under this category.
       dispatch({ type: ACTIONS.DELETE_EXPENSE_CATEGORY, payload: id });
-    }, []),
-    
-    addExpense: useCallback((data) => {
-      dispatch({ type: ACTIONS.ADD_EXPENSE, payload: data });
-    }, []),
-    
-    updateExpense: useCallback((id, updates) => {
+      if (isCloudEnabled && state.currentUser?.cloud && storeId && existing?.cloudId) {
+        const { error } = await cloudExpenses.removeCategory({ storeId, categoryId: existing.cloudId });
+        if (error) {
+          dispatch({ type: ACTIONS.ADD_TOAST, payload: { message: `Category removed here, but cloud sync failed: ${error.message}`, type: 'error' } });
+        }
+      }
+    }, [state.currentUser, state.cloudSession, state.expenseCategories]),
+
+    addExpense: useCallback(async (data) => {
+      const storeId = state.currentUser?.storeId || state.cloudSession?.storeId;
+      const draft = {
+        ...data,
+        createdBy: data.createdBy || state.currentUser?.name,
+        createdAt: Date.now(),
+      };
+      if (isCloudEnabled && state.currentUser?.cloud && storeId) {
+        const { data: saved, error } = await cloudExpenses.upsert({
+          storeId,
+          userId: state.currentUser.id,
+          expense: draft,
+        });
+        if (error) {
+          dispatch({ type: ACTIONS.ADD_TOAST, payload: { message: `Could not save expense: ${error.message}`, type: 'error' } });
+          return;
+        }
+        dispatch({
+          type: ACTIONS.ADD_EXPENSE,
+          payload: {
+            ...draft,
+            id: saved.id,
+            cloudId: saved.id,
+            categoryId: saved.categoryId || draft.categoryId,
+          },
+        });
+        return;
+      }
+      dispatch({ type: ACTIONS.ADD_EXPENSE, payload: draft });
+    }, [state.currentUser, state.cloudSession]),
+
+    updateExpense: useCallback(async (id, updates) => {
       dispatch({ type: ACTIONS.UPDATE_EXPENSE, payload: { id, updates } });
-    }, []),
-    
-    deleteExpense: useCallback((id) => {
+      const storeId = state.currentUser?.storeId || state.cloudSession?.storeId;
+      const existing = state.expenses.find(expense => expense.id === id);
+      if (isCloudEnabled && state.currentUser?.cloud && storeId && existing?.cloudId) {
+        const { error } = await cloudExpenses.upsert({
+          storeId,
+          userId: state.currentUser.id,
+          expense: { ...existing, ...updates },
+        });
+        if (error) {
+          dispatch({ type: ACTIONS.ADD_TOAST, payload: { message: `Expense updated here, but cloud sync failed: ${error.message}`, type: 'error' } });
+        }
+      }
+    }, [state.currentUser, state.cloudSession, state.expenses]),
+
+    deleteExpense: useCallback(async (id) => {
+      const storeId = state.currentUser?.storeId || state.cloudSession?.storeId;
+      const existing = state.expenses.find(expense => expense.id === id);
       dispatch({ type: ACTIONS.DELETE_EXPENSE, payload: id });
-    }, []),
+      if (isCloudEnabled && state.currentUser?.cloud && storeId && existing?.cloudId) {
+        const { error } = await cloudExpenses.remove({ storeId, expenseId: existing.cloudId });
+        if (error) {
+          dispatch({ type: ACTIONS.ADD_TOAST, payload: { message: `Expense removed here, but cloud sync failed: ${error.message}`, type: 'error' } });
+        }
+      }
+    }, [state.currentUser, state.cloudSession, state.expenses]),
     
     // Orders
     addItem: useCallback((menuItem, selectedModifiers, quantity, specialInstructions) => {
@@ -1610,12 +1860,23 @@ export function AppProvider({ children }) {
       dispatch({ type: ACTIONS.SET_PAYMENT_MODAL, payload: { open: true, method: null } });
     }, []),
     
-    processPayment: useCallback((method, amountPaid, change) => {
+    processPayment: useCallback(async (method, amountPaid, change) => {
       const order = state.currentOrder;
+      const completedOrder = {
+        ...order,
+        status: 'paid',
+        paymentMethod: method,
+        amountPaid,
+        change,
+        paidAt: Date.now(),
+      };
       dispatch({ type: ACTIONS.PROCESS_PAYMENT, payload: { method, amountPaid, change } });
 
       const storeId = state.currentUser?.storeId || state.cloudSession?.storeId;
-      if (order?.cloudId && isCloudEnabled && state.currentUser?.cloud && storeId) {
+      if (!(isCloudEnabled && state.currentUser?.cloud && storeId)) return;
+
+      if (order?.cloudId) {
+        // A placed order already has a cloud row — flip it to paid.
         cloudOrders.complete({ storeId, order, method, amountPaid, change }).then(({ error }) => {
           if (error) {
             dispatch({
@@ -1623,6 +1884,29 @@ export function AppProvider({ children }) {
               payload: { message: `Payment saved locally, but cloud sync failed: ${error.message}`, type: 'error' },
             });
           }
+        });
+      } else {
+        // A walk-in order paid directly was never "placed", so it has no cloud
+        // row yet. Insert it as paid, then fix the just-added history entry's
+        // temporary id to the durable cloud id so it syncs to every device.
+        const { data: saved, error } = await cloudOrders.saveTerminal({
+          storeId,
+          userId: state.currentUser.id,
+          order: completedOrder,
+        });
+        if (error) {
+          dispatch({
+            type: ACTIONS.ADD_TOAST,
+            payload: { message: `Payment saved on this device, but cloud sync failed: ${error.message}`, type: 'error' },
+          });
+          return;
+        }
+        dispatch({
+          type: ACTIONS.REPLACE_HISTORY_ID,
+          payload: {
+            fromId: completedOrder.id,
+            order: { ...completedOrder, id: saved.id, cloudId: saved.id },
+          },
         });
       }
     }, [state.currentOrder, state.currentUser, state.cloudSession]),

@@ -480,6 +480,24 @@ export const cloudOrders = {
       : { data: (data || []).map(fromOrderRow), error: null };
   },
 
+  // Completed (paid) and voided orders power the Reports, Dashboard "today's
+  // sales", Profit & Loss and Top Items views. They are written to Supabase by
+  // complete()/void() but were never read back, so every device only ever saw
+  // the orders it had itself rung up. Loading them here makes the numbers
+  // identical across desktop, tablet and phone.
+  async listHistory(storeId) {
+    if (!isCloudEnabled || !storeId) return { data: [], error: null };
+    const { data, error } = await supabase
+      .from('orders')
+      .select('*')
+      .eq('store_id', storeId)
+      .in('status', ['paid', 'voided'])
+      .order('created_at', { ascending: false });
+    return error
+      ? { data: [], error }
+      : { data: (data || []).map(fromOrderRow), error: null };
+  },
+
   async saveOpen({ storeId, userId, order }) {
     if (!isCloudEnabled) return { data: order, error: null };
     const durableId = order.cloudId || (isUuid(order.id) ? order.id : null);
@@ -547,6 +565,61 @@ export const cloudOrders = {
     return error ? { data: null, error } : { data: fromOrderRow(data), error: null };
   },
 
+  // Persist an order that is ALREADY in a terminal state (paid/voided). Used
+  // for two cases that the open/complete flow above does not cover:
+  //   1. A walk-in order paid directly (Cash/Card/E-wallet) without being
+  //      "placed" first — it has no cloud id yet, so it is inserted as paid.
+  //   2. One-time migration of device-local history into the shared cloud, so
+  //      a device's previously local-only sales appear everywhere.
+  async saveTerminal({ storeId, userId, order }) {
+    if (!isCloudEnabled) return { data: order, error: null };
+    const durableId = order.cloudId || (isUuid(order.id) ? order.id : null);
+    const status = order.status === 'voided' ? 'voided' : 'paid';
+    const row = {
+      store_id: storeId,
+      status,
+      table_ref: order.tableId || 'COUNTER',
+      items: order.items || [],
+      subtotal_cents: order.subtotal || 0,
+      tax_cents: order.tax || 0,
+      discount: order.discount || null,
+      discount_cents: order.discountAmount || 0,
+      total_cents: order.total || 0,
+      notes: order.notes || null,
+      server_name: order.serverName || '',
+      payment_method: order.paymentMethod || null,
+      amount_paid_cents: Number.isFinite(order.amountPaid) ? order.amountPaid : null,
+      change_cents: Number.isFinite(order.change) ? order.change : null,
+      paid_at: status === 'paid'
+        ? (order.paidAt ? new Date(order.paidAt).toISOString() : new Date().toISOString())
+        : null,
+      voided_at: status === 'voided'
+        ? (order.voidedAt ? new Date(order.voidedAt).toISOString() : new Date().toISOString())
+        : null,
+    };
+    if (!durableId) row.created_by = userId || null;
+    await applyDeliveryChannel(row, order);
+    let result;
+    if (durableId) {
+      result = await supabase
+        .from('orders')
+        .update(row)
+        .eq('id', durableId)
+        .eq('store_id', storeId)
+        .select('*')
+        .single();
+    } else {
+      result = await supabase
+        .from('orders')
+        .insert(row)
+        .select('*')
+        .single();
+    }
+    return result.error
+      ? { data: null, error: result.error }
+      : { data: fromOrderRow(result.data), error: null };
+  },
+
   subscribe(storeId, onChange) {
     if (!isCloudEnabled || !storeId) return () => {};
     const channel = supabase
@@ -554,6 +627,185 @@ export const cloudOrders = {
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'orders', filter: `store_id=eq.${storeId}` },
+        () => onChange?.()
+      )
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  },
+};
+
+// ---------------------------------------------------------------------------
+// cloudExpenses — expenses and their categories, shared across every device.
+// Previously expenses lived only in localStorage, so the Expenses tab and the
+// Profit & Loss view showed whatever THIS browser had recorded (zero on a new
+// phone). Category and expense ids are the Supabase UUIDs once synced.
+// ---------------------------------------------------------------------------
+
+function fromExpenseCategoryRow(row) {
+  return { id: row.id, cloudId: row.id, name: row.name, cloud: true };
+}
+
+// `nameById` maps a creator's profile id to their display name so the
+// "added by" line keeps working for cloud rows (expenses store only the
+// creator's auth id, not their name).
+function fromExpenseRow(row, nameById) {
+  return {
+    id: row.id,
+    cloudId: row.id,
+    categoryId: row.category_id,
+    description: row.description || '',
+    amount: row.amount_cents || 0,
+    // The app keys expense date filtering off `date` (a millisecond timestamp).
+    date: row.occurred_at
+      ? new Date(row.occurred_at).getTime()
+      : (row.created_at ? new Date(row.created_at).getTime() : Date.now()),
+    createdBy: (nameById && nameById.get(row.created_by)) || '',
+    createdAt: row.created_at ? new Date(row.created_at).getTime() : null,
+    cloud: true,
+  };
+}
+
+export const cloudExpenses = {
+  async listCategories(storeId) {
+    if (!isCloudEnabled || !storeId) return { data: [], error: null };
+    const { data, error } = await supabase
+      .from('expense_categories')
+      .select('*')
+      .eq('store_id', storeId)
+      .order('name', { ascending: true });
+    return error
+      ? { data: [], error }
+      : { data: (data || []).map(fromExpenseCategoryRow), error: null };
+  },
+
+  // A brand-new cloud store has no categories yet. Seed the starter set so a
+  // manager can record costs immediately, matching what a local install shows.
+  async seedCategories(storeId, defaults) {
+    if (!isCloudEnabled || !storeId) return { data: [], error: null };
+    const rows = (defaults || [])
+      .map((d) => ({ store_id: storeId, name: d.name }))
+      .filter((r) => r.name);
+    if (rows.length === 0) return { data: [], error: null };
+    const { data, error } = await supabase
+      .from('expense_categories')
+      .insert(rows)
+      .select('*');
+    return error
+      ? { data: [], error }
+      : { data: (data || []).map(fromExpenseCategoryRow), error: null };
+  },
+
+  async upsertCategory({ storeId, category }) {
+    if (!isCloudEnabled) return { data: category, error: null };
+    const payload = { store_id: storeId, name: category.name };
+    let result;
+    // Only an existing cloud category (a real UUID) can be updated; anything
+    // else (a local default id) is inserted as a new row.
+    if (category.cloudId && isUuid(category.cloudId)) {
+      result = await supabase
+        .from('expense_categories')
+        .update(payload)
+        .eq('id', category.cloudId)
+        .eq('store_id', storeId)
+        .select('*')
+        .single();
+    } else {
+      result = await supabase
+        .from('expense_categories')
+        .insert(payload)
+        .select('*')
+        .single();
+    }
+    return result.error
+      ? { data: null, error: result.error }
+      : { data: fromExpenseCategoryRow(result.data), error: null };
+  },
+
+  async removeCategory({ storeId, categoryId }) {
+    if (!isCloudEnabled) return { data: { ok: true }, error: null };
+    const { error } = await supabase
+      .from('expense_categories')
+      .delete()
+      .eq('id', categoryId)
+      .eq('store_id', storeId);
+    // The FK on expenses is ON DELETE CASCADE, so the rows vanish with it.
+    return error ? { data: null, error } : { data: { ok: true }, error: null };
+  },
+
+  async list(storeId) {
+    if (!isCloudEnabled || !storeId) return { data: [], error: null };
+    // Pull expenses and the store's members together so each expense can show
+    // who recorded it without a second round-trip per row.
+    const [expRes, memRes] = await Promise.all([
+      supabase
+        .from('expenses')
+        .select('*')
+        .eq('store_id', storeId)
+        .order('occurred_at', { ascending: false }),
+      supabase
+        .from('store_members')
+        .select('profile_id, display_name')
+        .eq('store_id', storeId),
+    ]);
+    if (expRes.error) return { data: [], error: expRes.error };
+    const nameById = new Map(
+      (memRes.data || []).map((m) => [m.profile_id, m.display_name])
+    );
+    return { data: (expRes.data || []).map((row) => fromExpenseRow(row, nameById)), error: null };
+  },
+
+  async upsert({ storeId, userId, expense }) {
+    if (!isCloudEnabled) return { data: expense, error: null };
+    const payload = {
+      store_id: storeId,
+      category_id: expense.categoryId,
+      description: expense.description || '',
+      amount_cents: expense.amount || 0,
+      occurred_at: new Date(expense.date || Date.now()).toISOString(),
+    };
+    let result;
+    if (expense.cloudId && isUuid(expense.cloudId)) {
+      // Preserve the original creator on edits.
+      result = await supabase
+        .from('expenses')
+        .update(payload)
+        .eq('id', expense.cloudId)
+        .eq('store_id', storeId)
+        .select('*')
+        .single();
+    } else {
+      result = await supabase
+        .from('expenses')
+        .insert({ ...payload, created_by: userId || null })
+        .select('*')
+        .single();
+    }
+    if (result.error) return { data: null, error: result.error };
+    return { data: fromExpenseRow(result.data), error: null };
+  },
+
+  async remove({ storeId, expenseId }) {
+    if (!isCloudEnabled) return { data: { ok: true }, error: null };
+    const { error } = await supabase
+      .from('expenses')
+      .delete()
+      .eq('id', expenseId)
+      .eq('store_id', storeId);
+    return error ? { data: null, error } : { data: { ok: true }, error: null };
+  },
+
+  subscribe(storeId, onChange) {
+    if (!isCloudEnabled || !storeId) return () => {};
+    const channel = supabase
+      .channel(`expenses-${storeId}-${Math.random().toString(36).slice(2)}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'expenses', filter: `store_id=eq.${storeId}` },
+        () => onChange?.()
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'expense_categories', filter: `store_id=eq.${storeId}` },
         () => onChange?.()
       )
       .subscribe();

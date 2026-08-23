@@ -24,8 +24,11 @@ function POSView() {
         <MenuPanel />
       </div>
       
-      {/* Order Panel - right side on large screens, bottom half on phones/tablets */}
-      <div className="flex-1 lg:w-3/5 lg:min-w-[400px]">
+      {/* Order Panel - right side on large screens, bottom half on phones/tablets.
+          min-h-0 lets this flex item shrink to its allotted share so the
+          panel's footer (Place Order + payment buttons) stays pinned at the
+          bottom and the item list scrolls instead of pushing it off-screen. */}
+      <div className="flex-1 min-h-0 lg:w-3/5 lg:min-w-[400px]">
         <OrderPanel />
       </div>
     </div>
