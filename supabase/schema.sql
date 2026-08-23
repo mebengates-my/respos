@@ -228,6 +228,40 @@ $$;
 revoke execute on function public.set_server_order_visibility(uuid, boolean) from public, anon;
 grant execute on function public.set_server_order_visibility(uuid, boolean) to authenticated;
 
+-- Same narrow pattern for the "servers may override a line price" switch, so a
+-- Manager can flip it without gaining write access to the rest of the store row.
+create or replace function public.set_server_price_access(p_store_id uuid, p_enabled boolean)
+returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare
+  updated_settings jsonb;
+begin
+  if not exists (
+    select 1 from public.store_members
+    where store_id = p_store_id
+      and profile_id = auth.uid()
+      and active = true
+      and role in ('admin', 'manager')
+  ) then
+    raise exception 'Only an Admin or Manager can change server price access';
+  end if;
+
+  update public.stores
+  set settings = jsonb_set(
+    coalesce(settings, '{}'::jsonb),
+    '{serverCanEditPrice}',
+    to_jsonb(coalesce(p_enabled, false))
+  )
+  where id = p_store_id
+  returning settings into updated_settings;
+
+  return updated_settings;
+end;
+$$;
+
+revoke execute on function public.set_server_price_access(uuid, boolean) from public, anon;
+grant execute on function public.set_server_price_access(uuid, boolean) to authenticated;
+
 -- ============================================================
 -- Store slugs: "My Café" → respos-five.vercel.app/my-cafe
 -- ============================================================

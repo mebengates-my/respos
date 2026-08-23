@@ -36,6 +36,7 @@ const ACTIONS = {
   SET_LANGUAGE: 'SET_LANGUAGE',
   SET_TAX_SETTINGS: 'SET_TAX_SETTINGS',
   SET_SERVER_ORDER_VISIBILITY: 'SET_SERVER_ORDER_VISIBILITY',
+  SET_SERVER_PRICE_ACCESS: 'SET_SERVER_PRICE_ACCESS',
   
   // Views
   SET_VIEW: 'SET_VIEW',
@@ -167,6 +168,10 @@ const initialState = {
   // Admin/Manager setting. It defaults to showing every open order; when off,
   // servers only receive orders created by their own account.
   serverCanViewAllOrders: initialStoreSettings.serverCanViewAllOrders !== false,
+  // Admin/Manager setting. Off by default: servers charge the menu price
+  // unless the store explicitly lets them override it. Never restricts
+  // Admins or Managers, who can always adjust a line price.
+  serverCanEditPrice: initialStoreSettings.serverCanEditPrice === true,
   
   // Tables. The counter represents a walk-in customer and is selected by
   // default, so a server can start a walk-in order immediately.
@@ -315,6 +320,9 @@ function appReducer(state, action) {
           : state.openOrders,
       };
     }
+
+    case ACTIONS.SET_SERVER_PRICE_ACCESS:
+      return { ...state, serverCanEditPrice: action.payload === true };
 
     // Keep order math in step with Admin → Settings → Tax & Currency.
     case ACTIONS.SET_TAX_SETTINGS: {
@@ -639,7 +647,10 @@ function appReducer(state, action) {
       const existingIndex = state.currentOrder?.items.findIndex(
         item => item.menuItemId === menuItem.id &&
         JSON.stringify(item.modifiers) === JSON.stringify(selectedModifiers || []) &&
-        item.specialInstructions === specialInstructions
+        item.specialInstructions === specialInstructions &&
+        // A line whose price was overridden must not silently absorb a newly
+        // added one at menu price — that would give away the discount twice.
+        item.price === menuItem.price
       );
       
       let newItems;
@@ -1071,6 +1082,10 @@ export function AppProvider({ children }) {
           type: ACTIONS.SET_SERVER_ORDER_VISIBILITY,
           payload: fresh.serverCanViewAllOrders,
         });
+        dispatch({
+          type: ACTIONS.SET_SERVER_PRICE_ACCESS,
+          payload: fresh.serverCanEditPrice,
+        });
         return;
       }
 
@@ -1180,6 +1195,10 @@ export function AppProvider({ children }) {
       dispatch({
         type: ACTIONS.SET_SERVER_ORDER_VISIBILITY,
         payload: merged.serverCanViewAllOrders,
+      });
+      dispatch({
+        type: ACTIONS.SET_SERVER_PRICE_ACCESS,
+        payload: merged.serverCanEditPrice,
       });
       // The RLS result set changes with this switch. Refetch now so turning it
       // on reveals allowed orders and turning it off purges disallowed ones.
@@ -1334,6 +1353,10 @@ export function AppProvider({ children }) {
 
     setServerOrderVisibility: useCallback((canViewAll) => {
       dispatch({ type: ACTIONS.SET_SERVER_ORDER_VISIBILITY, payload: canViewAll });
+    }, []),
+
+    setServerPriceAccess: useCallback((canEditPrice) => {
+      dispatch({ type: ACTIONS.SET_SERVER_PRICE_ACCESS, payload: canEditPrice });
     }, []),
 
     setLanguage: useCallback((lang) => {

@@ -364,6 +364,16 @@ export const cloudAuth = {
     return error ? { data: null, error } : { data, error: null };
   },
 
+  // Companion to updateServerOrderVisibility for the price-override switch.
+  async updateServerPriceAccess(storeId, enabled) {
+    if (!isCloudEnabled) return { data: { serverCanEditPrice: enabled === true }, error: null };
+    const { data, error } = await supabase.rpc('set_server_price_access', {
+      p_store_id: storeId,
+      p_enabled: enabled === true,
+    });
+    return error ? { data: null, error } : { data, error: null };
+  },
+
   subscribeStoreSettings(storeId, onChange) {
     if (!isCloudEnabled || !storeId) return () => {};
     const channel = supabase
