@@ -52,7 +52,8 @@ import {
   Bike,
   X,
   PlusCircle,
-  Star
+  Star,
+  Menu as MenuIcon
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -85,6 +86,10 @@ export default function AdminPanel() {
   const [currentView, setCurrentView] = useState(
     isManager ? AdminViews.OPEN_ORDERS : AdminViews.DASHBOARD
   );
+  // On phones/tablets the nav is an off-canvas drawer; from `lg` up it is a
+  // permanent sidebar. Picking a destination auto-closes the drawer so the
+  // content gets the whole screen back.
+  const [navOpen, setNavOpen] = useState(false);
 
   // Cloud (Supabase) mode: staff are real auth users, not the local demo list.
   // Fetch the store roster once so Dashboard and User Management show the truth
@@ -130,6 +135,20 @@ export default function AdminPanel() {
     { id: AdminViews.SETTINGS, icon: Settings, label: t('settings', language) },
   ].filter(item => !(isManager && MANAGER_HIDDEN_VIEWS.includes(item.id)));
   
+  useEffect(() => {
+    if (!navOpen) return undefined;
+    const onKeyDown = (event) => {
+      if (event.key === 'Escape') setNavOpen(false);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [navOpen]);
+
+  const goToView = (viewId) => {
+    setCurrentView(viewId);
+    setNavOpen(false);
+  };
+
   const handleLogout = async () => {
     const ok = await confirm({
       title: t('logout', language) + '?',
@@ -142,72 +161,145 @@ export default function AdminPanel() {
     }
   };
   
-  return (
-    <div className="flex h-screen bg-cream">
-      {/* Sidebar */}
-      <aside className="w-64 bg-espresso text-white flex flex-col">
-        <div className="p-4 border-b border-latte/30">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-accent rounded-xl flex items-center justify-center">
-              <Coffee className="w-5 h-5 text-white" />
-            </div>
-            <div>
-              <h1 className="font-display font-bold">
-                {isManager ? t('managerPanel', language) : t('adminPanel', language)}
-              </h1>
-              <p className="text-xs text-latte">
-                {currentUser?.name} · {t(currentUser?.role, language)}
-              </p>
-            </div>
+  const activeNavLabel =
+    navItems.find(item => item.id === currentView)?.label ||
+    (isManager ? t('managerPanel', language) : t('adminPanel', language));
+
+  // One nav body, rendered twice: once as the permanent lg+ sidebar, once
+  // inside the mobile drawer.
+  const navBody = (
+    <>
+      <div className="p-4 border-b border-latte/30">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 shrink-0 bg-accent rounded-xl flex items-center justify-center">
+            <Coffee className="w-5 h-5 text-white" />
+          </div>
+          <div className="min-w-0">
+            <h1 className="font-display font-bold truncate">
+              {isManager ? t('managerPanel', language) : t('adminPanel', language)}
+            </h1>
+            <p className="text-xs text-latte truncate">
+              {currentUser?.name} · {t(currentUser?.role, language)}
+            </p>
           </div>
         </div>
-        
-        <nav className="flex-1 p-4 space-y-1 overflow-y-auto">
-          {navItems.map(item => (
-            <button
-              key={item.id}
-              onClick={() => setCurrentView(item.id)}
-              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-colors ${
-                currentView === item.id
-                  ? 'bg-accent text-white'
-                  : 'hover:bg-latte/20 text-latte hover:text-white'
-              }`}
+      </div>
+
+      <nav className="flex-1 p-3 sm:p-4 space-y-1 overflow-y-auto">
+        {navItems.map(item => (
+          <button
+            key={item.id}
+            onClick={() => goToView(item.id)}
+            aria-current={currentView === item.id ? 'page' : undefined}
+            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-colors text-left ${
+              currentView === item.id
+                ? 'bg-accent text-white'
+                : 'hover:bg-latte/20 text-latte hover:text-white'
+            }`}
+          >
+            <item.icon className="w-5 h-5 shrink-0" />
+            <span className="font-medium truncate">{item.label}</span>
+          </button>
+        ))}
+      </nav>
+
+      <div className="p-3 sm:p-4 border-t border-latte/30 space-y-2">
+        <button
+          onClick={() => actions.setView('pos')}
+          className="w-full flex items-center gap-3 px-4 py-3 rounded-xl bg-accent text-white hover:bg-accent/90 transition-colors"
+        >
+          <LayoutGrid className="w-5 h-5 shrink-0" />
+          <span className="font-medium truncate">Back to POS</span>
+        </button>
+
+        <button
+          onClick={() => actions.setLanguage(language === 'en' ? 'bn' : 'en')}
+          className="w-full flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-latte/20 text-latte hover:text-white transition-colors"
+        >
+          <Globe className="w-5 h-5 shrink-0" />
+          <span className="font-medium truncate">{language === 'en' ? 'বাংলা' : 'English'}</span>
+        </button>
+
+        <button
+          onClick={handleLogout}
+          className="w-full flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-error/20 text-error transition-colors"
+        >
+          <LogOut className="w-5 h-5 shrink-0" />
+          <span className="font-medium truncate">{t('logout', language)}</span>
+        </button>
+      </div>
+    </>
+  );
+
+  return (
+    <div className="flex h-screen bg-cream overflow-hidden">
+      {/* Permanent sidebar from lg up */}
+      <aside className="hidden lg:flex w-64 shrink-0 bg-espresso text-white flex-col">
+        {navBody}
+      </aside>
+
+      {/* Off-canvas nav drawer for phones/tablets */}
+      <AnimatePresence>
+        {navOpen && (
+          <>
+            <motion.div
+              key="admin-nav-scrim"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.15 }}
+              onClick={() => setNavOpen(false)}
+              className="lg:hidden fixed inset-0 z-40 bg-dark-roast/50"
+            />
+            <motion.aside
+              key="admin-nav-drawer"
+              initial={{ x: '-100%' }}
+              animate={{ x: 0 }}
+              exit={{ x: '-100%' }}
+              transition={{ type: 'tween', duration: 0.22, ease: 'easeOut' }}
+              className="lg:hidden fixed inset-y-0 left-0 z-50 w-72 max-w-[85%] bg-espresso text-white flex flex-col shadow-2xl"
             >
-              <item.icon className="w-5 h-5" />
-              <span className="font-medium">{item.label}</span>
-            </button>
-          ))}
-        </nav>
-        
-        <div className="p-4 border-t border-latte/30 space-y-2">
+              <button
+                onClick={() => setNavOpen(false)}
+                aria-label="Close menu"
+                className="absolute top-3 right-3 p-2 rounded-lg text-latte hover:bg-latte/20 hover:text-white transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+              {navBody}
+            </motion.aside>
+          </>
+        )}
+      </AnimatePresence>
+
+      <div className="flex-1 min-w-0 flex flex-col">
+        {/* Mobile top bar with the hamburger handle */}
+        <div className="lg:hidden flex items-center gap-3 px-3 py-2.5 bg-espresso text-white shadow-md shrink-0">
+          <button
+            onClick={() => setNavOpen(true)}
+            aria-label="Open menu"
+            aria-expanded={navOpen}
+            className="p-2 -ml-1 rounded-lg hover:bg-latte/20 transition-colors btn-press"
+          >
+            <MenuIcon className="w-6 h-6" />
+          </button>
+          <div className="min-w-0 flex-1">
+            <p className="font-display font-semibold leading-tight truncate">{activeNavLabel}</p>
+            <p className="text-[11px] text-latte truncate">
+              {currentUser?.name} · {t(currentUser?.role, language)}
+            </p>
+          </div>
           <button
             onClick={() => actions.setView('pos')}
-            className="w-full flex items-center gap-3 px-4 py-3 rounded-xl bg-accent text-white hover:bg-accent/90 transition-colors"
+            aria-label="Back to POS"
+            className="p-2 rounded-lg bg-accent hover:bg-accent/90 transition-colors btn-press shrink-0"
           >
             <LayoutGrid className="w-5 h-5" />
-            <span className="font-medium">Back to POS</span>
-          </button>
-          
-          <button
-            onClick={() => actions.setLanguage(language === 'en' ? 'bn' : 'en')}
-            className="w-full flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-latte/20 text-latte hover:text-white transition-colors"
-          >
-            <Globe className="w-5 h-5" />
-            <span className="font-medium">{language === 'en' ? 'বাংলা' : 'English'}</span>
-          </button>
-          
-          <button
-            onClick={handleLogout}
-            className="w-full flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-error/20 text-error transition-colors"
-          >
-            <LogOut className="w-5 h-5" />
-            <span className="font-medium">{t('logout', language)}</span>
           </button>
         </div>
-      </aside>
-      
-      {/* Main Content */}
-      <main className="flex-1 overflow-auto">
+
+        {/* Main Content */}
+        <main className="flex-1 overflow-auto">
         {currentView === AdminViews.DASHBOARD && <DashboardView language={language} state={state} userCount={userCount} />}
         {currentView === AdminViews.OPEN_ORDERS && <OpenOrdersView language={language} state={state} actions={actions} />}
         {currentView === AdminViews.USERS && !isManager && (
@@ -229,7 +321,8 @@ export default function AdminPanel() {
         {currentView === AdminViews.EXPENSE_CATEGORIES && <ExpenseCategoriesView language={language} state={state} actions={actions} />}
         {currentView === AdminViews.PNL && <ProfitLossView language={language} state={state} />}
         {currentView === AdminViews.SETTINGS && <StoreSettingsView state={state} actions={actions} />}
-      </main>
+        </main>
+      </div>
     </div>
   );
 }
@@ -246,7 +339,7 @@ function DashboardView({ language, state, userCount }) {
   const monthSales = orderHistory.filter(o => o.paidAt >= monthAgo).reduce((sum, o) => sum + o.total, 0);
   
   return (
-    <div className="p-6">
+    <div className="p-3 sm:p-6">
       <h1 className="text-2xl font-display font-bold text-dark-roast mb-6">{t('dashboard', language)}</h1>
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
         {[
@@ -255,7 +348,7 @@ function DashboardView({ language, state, userCount }) {
           { label: t('thisMonth', language), value: formatPrice(monthSales), icon: BarChart3, color: 'text-espresso', bg: 'bg-espresso/10' },
           { label: t('users', language), value: String(userCount), icon: Users, color: 'text-medium-roast', bg: 'bg-medium-roast/10' },
         ].map((stat, i) => (
-          <motion.div key={stat.label} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.1 }} className="bg-white rounded-2xl p-6 shadow-sm">
+          <motion.div key={stat.label} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.1 }} className="bg-white rounded-2xl p-4 sm:p-6 shadow-sm">
             <div className={`w-12 h-12 ${stat.bg} rounded-xl flex items-center justify-center ${stat.color} mb-4`}><stat.icon className="w-6 h-6" /></div>
             <p className="text-sm text-medium-roast mb-1">{stat.label}</p>
             <p className="text-2xl font-mono font-bold">{stat.value}</p>
@@ -304,10 +397,10 @@ function OpenOrdersView({ language, state, actions }) {
   };
 
   return (
-    <div className="p-6">
-      <div className="flex items-center justify-between mb-6">
+    <div className="p-3 sm:p-6">
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-6">
         <div>
-          <h1 className="text-2xl font-display font-bold text-dark-roast flex items-center gap-3">
+          <h1 className="text-xl sm:text-2xl font-display font-bold text-dark-roast flex items-center gap-2 sm:gap-3 min-w-0">
             <ClipboardList className="w-7 h-7" />
             {t('openOrders', language)}
           </h1>
@@ -523,9 +616,9 @@ function UsersView({ language, state, actions, cloudMembers, cloudMembersLoading
     : Boolean(formData.name) && formData.pin.length === 4;
 
   return (
-    <div className="p-6">
-      <div className="flex items-center justify-between mb-6">
-        <h1 className="text-2xl font-display font-bold text-dark-roast">{t('userManagement', language)}</h1>
+    <div className="p-3 sm:p-6">
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-6">
+        <h1 className="text-xl sm:text-2xl font-display font-bold text-dark-roast">{t('userManagement', language)}</h1>
         <button onClick={openAdd} className="flex items-center gap-2 px-4 py-2 bg-accent text-white rounded-xl"><Plus className="w-5 h-5" /> {t('addUser', language)}</button>
       </div>
 
@@ -545,32 +638,65 @@ function UsersView({ language, state, actions, cloudMembers, cloudMembersLoading
           </button>
         </div>
       )}
-      <div className="bg-white rounded-2xl shadow-sm overflow-hidden">
+      {/* Mobile: one card per staff member. From sm up the real table returns. */}
+      <div className="sm:hidden space-y-3">
+        {isCloud && cloudMembersLoading && list.length === 0 ? (
+          <p className="bg-white rounded-2xl shadow-sm py-8 text-center text-medium-roast">{t('loadingMembers', language)}</p>
+        ) : list.length === 0 ? (
+          <p className="bg-white rounded-2xl shadow-sm py-8 text-center text-medium-roast">{isCloud ? t('staffEmpty', language) : t('noData', language)}</p>
+        ) : list.map(user => (
+          <div key={user.id} className="bg-white rounded-2xl shadow-sm p-4">
+            <div className="flex items-start gap-3">
+              <div className={`w-10 h-10 shrink-0 rounded-xl flex items-center justify-center ${user.role === 'admin' ? 'bg-espresso' : user.role === 'manager' ? 'bg-accent' : 'bg-success'}`}>
+                <Users className="w-5 h-5 text-white" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="font-medium text-dark-roast break-words">{user.name}</div>
+                <span className={`inline-block mt-1 px-2.5 py-0.5 rounded-full text-xs font-medium ${user.role === 'admin' ? 'bg-espresso/10 text-espresso' : user.role === 'manager' ? 'bg-accent/10 text-accent' : 'bg-success/10 text-success'}`}>
+                  {t(user.role, language)}
+                </span>
+              </div>
+              <div className="flex gap-1 shrink-0">
+                <button onClick={() => openEdit(user)} aria-label={`Edit ${user.name}`} className="p-2 hover:bg-latte/20 rounded-lg"><Edit className="w-4 h-4 text-medium-roast" /></button>
+                <button onClick={() => handleDelete(user)} aria-label={`Delete ${user.name}`} className="p-2 hover:bg-error/10 rounded-lg"><Trash2 className="w-4 h-4 text-error" /></button>
+              </div>
+            </div>
+            <div className="mt-3 pt-3 border-t border-latte/10 flex items-baseline justify-between gap-3">
+              <span className="text-xs text-medium-roast shrink-0">{isCloud ? t('email', language) : t('userPin', language)}</span>
+              <span className="font-mono text-sm text-dark-roast break-all text-right">{isCloud ? (user.email || '—') : '••••'}</span>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className="hidden sm:block bg-white rounded-2xl shadow-sm overflow-hidden">
+        <div className="overflow-x-auto">
         <table className="w-full">
-          <thead className="bg-cream"><tr><th className="px-6 py-4 text-left text-sm font-semibold">{t('userName', language)}</th><th className="px-6 py-4 text-left text-sm font-semibold">{t('userRole', language)}</th><th className="px-6 py-4 text-left text-sm font-semibold">{isCloud ? t('email', language) : t('userPin', language)}</th><th className="px-6 py-4 text-right text-sm font-semibold">Actions</th></tr></thead>
+          <thead className="bg-cream"><tr><th className="px-4 lg:px-6 py-4 text-left text-sm font-semibold">{t('userName', language)}</th><th className="px-4 lg:px-6 py-4 text-left text-sm font-semibold">{t('userRole', language)}</th><th className="px-4 lg:px-6 py-4 text-left text-sm font-semibold">{isCloud ? t('email', language) : t('userPin', language)}</th><th className="px-4 lg:px-6 py-4 text-right text-sm font-semibold">Actions</th></tr></thead>
           <tbody>
             {isCloud && cloudMembersLoading && list.length === 0 ? (
-              <tr><td colSpan="4" className="px-6 py-8 text-center text-medium-roast">{t('loadingMembers', language)}</td></tr>
+              <tr><td colSpan="4" className="px-4 lg:px-6 py-8 text-center text-medium-roast">{t('loadingMembers', language)}</td></tr>
             ) : list.length === 0 ? (
-              <tr><td colSpan="4" className="px-6 py-8 text-center text-medium-roast">{isCloud ? t('staffEmpty', language) : t('noData', language)}</td></tr>
+              <tr><td colSpan="4" className="px-4 lg:px-6 py-8 text-center text-medium-roast">{isCloud ? t('staffEmpty', language) : t('noData', language)}</td></tr>
             ) : list.map(user => (
               <tr key={user.id} className="border-t border-latte/10 hover:bg-cream/50">
-                <td className="px-6 py-4"><div className="flex items-center gap-3"><div className={`w-10 h-10 rounded-xl flex items-center justify-center ${user.role === 'admin' ? 'bg-espresso' : user.role === 'manager' ? 'bg-accent' : 'bg-success'}`}><Users className="w-5 h-5 text-white" /></div><div><div className="font-medium">{user.name}</div>{isCloud && user.email ? <div className="text-xs text-medium-roast">{user.email}</div> : null}</div></div></td>
-                <td className="px-6 py-4"><span className={`px-3 py-1 rounded-full text-sm font-medium ${user.role === 'admin' ? 'bg-espresso/10 text-espresso' : user.role === 'manager' ? 'bg-accent/10 text-accent' : 'bg-success/10 text-success'}`}>{t(user.role, language)}</span></td>
-                <td className="px-6 py-4 font-mono text-medium-roast">{isCloud ? (user.email || '—') : '••••'}</td>
-                <td className="px-6 py-4"><div className="flex justify-end gap-2">
-                  <button onClick={() => openEdit(user)} className="p-2 hover:bg-latte/20 rounded-lg"><Edit className="w-4 h-4 text-medium-roast" /></button>
-                  <button onClick={() => handleDelete(user)} className="p-2 hover:bg-error/10 rounded-lg"><Trash2 className="w-4 h-4 text-error" /></button>
+                <td className="px-4 lg:px-6 py-4"><div className="flex items-center gap-3"><div className={`w-10 h-10 shrink-0 rounded-xl flex items-center justify-center ${user.role === 'admin' ? 'bg-espresso' : user.role === 'manager' ? 'bg-accent' : 'bg-success'}`}><Users className="w-5 h-5 text-white" /></div><div className="min-w-0"><div className="font-medium">{user.name}</div>{isCloud && user.email ? <div className="text-xs text-medium-roast break-all">{user.email}</div> : null}</div></div></td>
+                <td className="px-4 lg:px-6 py-4"><span className={`inline-block px-3 py-1 rounded-full text-sm font-medium whitespace-nowrap ${user.role === 'admin' ? 'bg-espresso/10 text-espresso' : user.role === 'manager' ? 'bg-accent/10 text-accent' : 'bg-success/10 text-success'}`}>{t(user.role, language)}</span></td>
+                <td className="px-4 lg:px-6 py-4 font-mono text-medium-roast break-all">{isCloud ? (user.email || '—') : '••••'}</td>
+                <td className="px-4 lg:px-6 py-4"><div className="flex justify-end gap-2">
+                  <button onClick={() => openEdit(user)} aria-label={`Edit ${user.name}`} className="p-2 hover:bg-latte/20 rounded-lg"><Edit className="w-4 h-4 text-medium-roast" /></button>
+                  <button onClick={() => handleDelete(user)} aria-label={`Delete ${user.name}`} className="p-2 hover:bg-error/10 rounded-lg"><Trash2 className="w-4 h-4 text-error" /></button>
                 </div></td>
               </tr>
             ))}
           </tbody>
         </table>
+        </div>
       </div>
       
       <AnimatePresence>{showModal && (
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={() => setShowModal(false)}>
-          <motion.div initial={{ scale: 0.95 }} animate={{ scale: 1 }} exit={{ scale: 0.95 }} className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6" onClick={e => e.stopPropagation()}>
+          <motion.div initial={{ scale: 0.95 }} animate={{ scale: 1 }} exit={{ scale: 0.95 }} className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-4 sm:p-6" onClick={e => e.stopPropagation()}>
             <h2 className="text-xl font-display font-bold mb-6">{editingUser ? t('editUser', language) : t('addUser', language)}</h2>
             <div className="space-y-4">
               <div><label className="block text-sm font-medium text-medium-roast mb-2">{t('userName', language)}</label><input type="text" value={formData.name} onChange={e => setFormData({ ...formData, name: e.target.value })} className="w-full px-4 py-3 bg-cream border border-latte/30 rounded-xl focus:outline-none focus:border-accent" /></div>
@@ -613,9 +739,9 @@ function CategoriesView({ language, state, actions }) {
   };
   
   return (
-    <div className="p-6">
-      <div className="flex items-center justify-between mb-6">
-        <h1 className="text-2xl font-display font-bold text-dark-roast">{t('categoryManagement', language)}</h1>
+    <div className="p-3 sm:p-6">
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-6">
+        <h1 className="text-xl sm:text-2xl font-display font-bold text-dark-roast">{t('categoryManagement', language)}</h1>
         <button onClick={() => { setEditingCategory(null); setFormData({ name: '', icon: 'Coffee' }); setShowModal(true); }} className="flex items-center gap-2 px-4 py-2 bg-accent text-white rounded-xl"><Plus className="w-5 h-5" /> {t('addCategory', language)}</button>
       </div>
 
@@ -657,7 +783,7 @@ function CategoriesView({ language, state, actions }) {
       
       <AnimatePresence>{showModal && (
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={() => setShowModal(false)}>
-          <motion.div initial={{ scale: 0.95 }} animate={{ scale: 1 }} exit={{ scale: 0.95 }} className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6" onClick={e => e.stopPropagation()}>
+          <motion.div initial={{ scale: 0.95 }} animate={{ scale: 1 }} exit={{ scale: 0.95 }} className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-4 sm:p-6" onClick={e => e.stopPropagation()}>
             <h2 className="text-xl font-display font-bold mb-6">{editingCategory ? t('edit', language) : t('addCategory', language)}</h2>
             <div><label className="block text-sm font-medium text-medium-roast mb-2">{t('categoryName', language)}</label><input type="text" value={formData.name} onChange={e => setFormData({ ...formData, name: e.target.value })} className="w-full px-4 py-3 bg-cream border border-latte/30 rounded-xl focus:outline-none focus:border-accent" /></div>
             <div className="flex gap-3 mt-6"><button onClick={() => setShowModal(false)} className="flex-1 py-3 bg-latte/10 rounded-xl font-medium">{t('cancel', language)}</button><button onClick={handleSubmit} disabled={!formData.name} className="flex-1 py-3 bg-accent text-white rounded-xl font-medium disabled:opacity-50">{t('save', language)}</button></div>
@@ -743,9 +869,9 @@ function MenuItemsView({ language, state, actions }) {
   };
   
   return (
-    <div className="p-6">
-      <div className="flex items-center justify-between mb-6">
-        <h1 className="text-2xl font-display font-bold text-dark-roast">{t('menuItems', language)}</h1>
+    <div className="p-3 sm:p-6">
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-6">
+        <h1 className="text-xl sm:text-2xl font-display font-bold text-dark-roast">{t('menuItems', language)}</h1>
         <button onClick={openAdd} className="flex items-center gap-2 px-4 py-2 bg-accent text-white rounded-xl"><Plus className="w-5 h-5" /> {t('addItem', language)}</button>
       </div>
       
@@ -1012,9 +1138,9 @@ function TablesView({ language, state, actions }) {
   };
   
   return (
-    <div className="p-6">
-      <div className="flex items-center justify-between mb-6">
-        <h1 className="text-2xl font-display font-bold text-dark-roast">{t('tableManagement', language)}</h1>
+    <div className="p-3 sm:p-6">
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-6">
+        <h1 className="text-xl sm:text-2xl font-display font-bold text-dark-roast">{t('tableManagement', language)}</h1>
         <button onClick={() => { setEditingTable(null); setFormData({ number: '', capacity: 4 }); setShowModal(true); }} className="flex items-center gap-2 px-4 py-2 bg-accent text-white rounded-xl"><Plus className="w-5 h-5" /> {t('addTable', language)}</button>
       </div>
       <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
@@ -1029,7 +1155,7 @@ function TablesView({ language, state, actions }) {
       
       <AnimatePresence>{showModal && (
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={() => setShowModal(false)}>
-          <motion.div initial={{ scale: 0.95 }} animate={{ scale: 1 }} exit={{ scale: 0.95 }} className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6" onClick={e => e.stopPropagation()}>
+          <motion.div initial={{ scale: 0.95 }} animate={{ scale: 1 }} exit={{ scale: 0.95 }} className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-4 sm:p-6" onClick={e => e.stopPropagation()}>
             <h2 className="text-xl font-display font-bold mb-6">{editingTable ? t('editTable', language) : t('addTable', language)}</h2>
             <div className="space-y-4">
               <div><label className="block text-sm font-medium text-medium-roast mb-2">{t('tableNumber', language)}</label><input type="number" value={formData.number} onChange={e => setFormData({ ...formData, number: e.target.value })} className="w-full px-4 py-3 bg-cream border border-latte/30 rounded-xl focus:outline-none focus:border-accent" /></div>
@@ -1099,9 +1225,9 @@ function DeliveryChannelsView({ language, state, actions }) {
   };
 
   return (
-    <div className="p-6">
+    <div className="p-3 sm:p-6">
       <div className="flex items-center justify-between mb-2">
-        <h1 className="text-2xl font-display font-bold text-dark-roast flex items-center gap-3">
+        <h1 className="text-xl sm:text-2xl font-display font-bold text-dark-roast flex items-center gap-2 sm:gap-3 min-w-0">
           <Bike className="w-7 h-7" />
           {t('deliveryServices', language)}
         </h1>
@@ -1146,7 +1272,7 @@ function DeliveryChannelsView({ language, state, actions }) {
 
       <AnimatePresence>{showModal && (
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={() => setShowModal(false)}>
-          <motion.div initial={{ scale: 0.95 }} animate={{ scale: 1 }} exit={{ scale: 0.95 }} className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6" onClick={e => e.stopPropagation()}>
+          <motion.div initial={{ scale: 0.95 }} animate={{ scale: 1 }} exit={{ scale: 0.95 }} className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-4 sm:p-6" onClick={e => e.stopPropagation()}>
             <h2 className="text-xl font-display font-bold mb-6">{editingChannel ? t('editDeliveryService', language) : t('addDeliveryService', language)}</h2>
             <div className="space-y-4">
               <div>
@@ -1261,9 +1387,9 @@ function ReportsView({ language, state, actions }) {
   };
   
   return (
-    <div className="p-6">
-      <div className="flex items-center justify-between mb-6">
-        <h1 className="text-2xl font-display font-bold text-dark-roast">{t('salesReport', language)}</h1>
+    <div className="p-3 sm:p-6">
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-6">
+        <h1 className="text-xl sm:text-2xl font-display font-bold text-dark-roast">{t('salesReport', language)}</h1>
         <button onClick={handleExportPdf} className="flex items-center gap-2 px-4 py-2 bg-error text-white rounded-xl"><Download className="w-5 h-5" /> {t('downloadPdf', language)}</button>
       </div>
       
@@ -1279,10 +1405,10 @@ function ReportsView({ language, state, actions }) {
       </div>
       
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div className="bg-white rounded-2xl p-6 shadow-sm"><h2 className="font-semibold mb-4">{t('topItems', language)}</h2>
+        <div className="bg-white rounded-2xl p-4 sm:p-6 shadow-sm"><h2 className="font-semibold mb-4">{t('topItems', language)}</h2>
           {topItems.length === 0 ? <p className="text-medium-roast text-center py-8">{t('noData', language)}</p> : <div className="space-y-3">{topItems.map((item, i) => (<div key={item.name} className="flex items-center gap-3"><span className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold ${i === 0 ? 'bg-accent text-white' : i === 1 ? 'bg-latte text-white' : 'bg-cream'}`}>{i + 1}</span><div className="flex-1"><p className="font-medium">{item.name}</p><p className="text-xs text-medium-roast">{item.quantity} sold</p></div><span className="font-mono font-semibold text-espresso">{formatPrice(item.revenue)}</span></div>))}</div>}
         </div>
-        <div className="bg-white rounded-2xl p-6 shadow-sm"><h2 className="font-semibold mb-4">{t('recentTransactions', language)}</h2>
+        <div className="bg-white rounded-2xl p-4 sm:p-6 shadow-sm"><h2 className="font-semibold mb-4">{t('recentTransactions', language)}</h2>
           {filteredOrders.length === 0 ? <p className="text-medium-roast text-center py-8">{t('noData', language)}</p> : <div className="overflow-x-auto"><table className="w-full text-sm"><thead><tr className="border-b border-latte/20"><th className="py-2 text-left">Order</th><th className="py-2 text-left">Payment</th><th className="py-2 text-right">Total</th></tr></thead><tbody>{filteredOrders.slice(0, 10).map(order => (<tr key={order.id} className="border-b border-latte/10"><td className="py-2 font-mono">{order.id.slice(-8)}</td><td className="py-2 capitalize">{order.paymentMethod}</td><td className="py-2 text-right font-mono font-semibold">{formatPrice(order.total)}</td></tr>))}</tbody></table></div>}
         </div>
       </div>
@@ -1486,9 +1612,9 @@ function StoreSettingsView({ state, actions }) {
   // business, backup and danger-zone settings remain hidden.
   if (isManager) {
     return (
-      <div className="p-6">
-        <div className="flex items-center justify-between mb-6">
-          <h1 className="text-2xl font-display font-bold text-dark-roast flex items-center gap-3">
+      <div className="p-3 sm:p-6">
+        <div className="flex flex-wrap items-center justify-between gap-3 mb-6">
+          <h1 className="text-xl sm:text-2xl font-display font-bold text-dark-roast flex items-center gap-2 sm:gap-3 min-w-0">
             <Settings className="w-7 h-7" />
             Settings
           </h1>
@@ -1510,9 +1636,9 @@ function StoreSettingsView({ state, actions }) {
   }
   
   return (
-    <div className="p-6">
-      <div className="flex items-center justify-between mb-6">
-        <h1 className="text-2xl font-display font-bold text-dark-roast flex items-center gap-3">
+    <div className="p-3 sm:p-6">
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-6">
+        <h1 className="text-xl sm:text-2xl font-display font-bold text-dark-roast flex items-center gap-2 sm:gap-3 min-w-0">
           <Store className="w-7 h-7" />
           Store Settings
         </h1>
@@ -1685,7 +1811,7 @@ function StoreSettingsView({ state, actions }) {
           <div className="p-4 bg-latte/20">
             <h2 className="font-semibold">Language Settings</h2>
           </div>
-          <div className="p-6">
+          <div className="p-3 sm:p-6">
             <div className="flex gap-4">
               <button onClick={() => actions.setLanguage('en')} className={`flex-1 py-4 rounded-xl font-medium flex items-center justify-center gap-2 ${state.language === 'en' ? 'bg-accent text-white' : 'bg-cream hover:bg-latte/20'}`}>🇬🇧 English</button>
               <button onClick={() => actions.setLanguage('bn')} className={`flex-1 py-4 rounded-xl font-medium flex items-center justify-center gap-2 ${state.language === 'bn' ? 'bg-accent text-white' : 'bg-cream hover:bg-latte/20'}`}>🇧🇩 বাংলা</button>
@@ -1855,9 +1981,9 @@ function ExpenseCategoriesView({ language, state, actions }) {
   };
   
   return (
-    <div className="p-6">
-      <div className="flex items-center justify-between mb-6">
-        <h1 className="text-2xl font-display font-bold text-dark-roast flex items-center gap-3">
+    <div className="p-3 sm:p-6">
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-6">
+        <h1 className="text-xl sm:text-2xl font-display font-bold text-dark-roast flex items-center gap-2 sm:gap-3 min-w-0">
           <Tags className="w-7 h-7" />
           {t('expenseCategories', language)}
         </h1>
@@ -1891,7 +2017,7 @@ function ExpenseCategoriesView({ language, state, actions }) {
       
       <AnimatePresence>{showModal && (
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={() => setShowModal(false)}>
-          <motion.div initial={{ scale: 0.95 }} animate={{ scale: 1 }} exit={{ scale: 0.95 }} className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6" onClick={e => e.stopPropagation()}>
+          <motion.div initial={{ scale: 0.95 }} animate={{ scale: 1 }} exit={{ scale: 0.95 }} className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-4 sm:p-6" onClick={e => e.stopPropagation()}>
             <h2 className="text-xl font-display font-bold mb-6">{editingCategory ? t('editExpenseCategory', language) : t('addExpenseCategory', language)}</h2>
             <div>
               <label className="block text-sm font-medium text-medium-roast mb-2">{t('categoryName', language)}</label>
@@ -1986,9 +2112,9 @@ function ExpensesView({ language, state, actions }) {
   const filteredTotal = filteredExpenses.reduce((sum, e) => sum + e.amount, 0);
   
   return (
-    <div className="p-6">
-      <div className="flex items-center justify-between mb-6">
-        <h1 className="text-2xl font-display font-bold text-dark-roast flex items-center gap-3">
+    <div className="p-3 sm:p-6">
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-6">
+        <h1 className="text-xl sm:text-2xl font-display font-bold text-dark-roast flex items-center gap-2 sm:gap-3 min-w-0">
           <Wallet className="w-7 h-7" />
           {t('expenses', language)}
         </h1>
@@ -2029,52 +2155,86 @@ function ExpensesView({ language, state, actions }) {
         </div>
       </div>
       
-      {/* Expense list */}
-      <div className="bg-white rounded-2xl shadow-sm overflow-hidden">
-        {filteredExpenses.length === 0 ? (
+      {/* Expense list — cards on phones, table from sm up */}
+      {filteredExpenses.length === 0 ? (
+        <div className="bg-white rounded-2xl shadow-sm">
           <p className="text-medium-roast text-center py-12">{t('noExpenses', language)}</p>
-        ) : (
-          <table className="w-full">
-            <thead className="bg-cream">
-              <tr>
-                <th className="px-6 py-4 text-left text-sm font-semibold">{t('expenseDate', language)}</th>
-                <th className="px-6 py-4 text-left text-sm font-semibold">{t('expenseCategory', language)}</th>
-                <th className="px-6 py-4 text-left text-sm font-semibold">{t('expenseDescription', language)}</th>
-                <th className="px-6 py-4 text-right text-sm font-semibold">{t('expenseAmount', language)}</th>
-                <th className="px-6 py-4 text-right text-sm font-semibold">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredExpenses.map(expense => (
-                <tr key={expense.id} className="border-t border-latte/10 hover:bg-cream/50">
-                  <td className="px-6 py-4 text-sm text-medium-roast whitespace-nowrap">
+        </div>
+      ) : (
+        <>
+          <div className="sm:hidden space-y-3">
+            {filteredExpenses.map(expense => (
+              <div key={expense.id} className="bg-white rounded-2xl shadow-sm p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0 flex-1">
+                    <span className="inline-block px-2.5 py-0.5 rounded-full text-xs font-medium bg-error/10 text-error">
+                      {categoryName(expense.categoryId)}
+                    </span>
+                    <p className="mt-1.5 font-medium text-dark-roast break-words">{expense.description || '—'}</p>
+                    {expense.createdBy && <p className="text-xs text-latte break-words">{expense.createdBy}</p>}
+                  </div>
+                  <span className="font-mono font-semibold text-error shrink-0 text-right">{formatPrice(expense.amount)}</span>
+                </div>
+                <div className="mt-3 pt-3 border-t border-latte/10 flex items-center justify-between gap-2">
+                  <span className="text-xs text-medium-roast">
                     {new Date(expense.date).toLocaleDateString('en-MY', { day: '2-digit', month: 'short', year: 'numeric' })}
                     <span className="text-latte"> · </span>
                     {new Date(expense.date).toLocaleTimeString('en-MY', { hour: '2-digit', minute: '2-digit' })}
-                  </td>
-                  <td className="px-6 py-4"><span className="px-3 py-1 rounded-full text-xs font-medium bg-error/10 text-error whitespace-nowrap">{categoryName(expense.categoryId)}</span></td>
-                  <td className="px-6 py-4">
-                    <span className="font-medium">{expense.description || '—'}</span>
-                    {expense.createdBy && <span className="text-xs text-latte block">{expense.createdBy}</span>}
-                  </td>
-                  <td className="px-6 py-4 text-right font-mono font-semibold text-error">{formatPrice(expense.amount)}</td>
-                  <td className="px-6 py-4">
-                    <div className="flex justify-end gap-2">
-                      <button onClick={() => openEditModal(expense)} className="p-2 hover:bg-latte/20 rounded-lg"><Edit className="w-4 h-4 text-medium-roast" /></button>
-                      <button onClick={() => handleDelete(expense)} className="p-2 hover:bg-error/10 rounded-lg"><Trash2 className="w-4 h-4 text-error" /></button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
+                  </span>
+                  <div className="flex gap-1 shrink-0">
+                    <button onClick={() => openEditModal(expense)} aria-label="Edit expense" className="p-2 hover:bg-latte/20 rounded-lg"><Edit className="w-4 h-4 text-medium-roast" /></button>
+                    <button onClick={() => handleDelete(expense)} aria-label="Delete expense" className="p-2 hover:bg-error/10 rounded-lg"><Trash2 className="w-4 h-4 text-error" /></button>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="hidden sm:block bg-white rounded-2xl shadow-sm overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead className="bg-cream">
+                  <tr>
+                    <th className="px-4 lg:px-6 py-4 text-left text-sm font-semibold">{t('expenseDate', language)}</th>
+                    <th className="px-4 lg:px-6 py-4 text-left text-sm font-semibold">{t('expenseCategory', language)}</th>
+                    <th className="px-4 lg:px-6 py-4 text-left text-sm font-semibold">{t('expenseDescription', language)}</th>
+                    <th className="px-4 lg:px-6 py-4 text-right text-sm font-semibold">{t('expenseAmount', language)}</th>
+                    <th className="px-4 lg:px-6 py-4 text-right text-sm font-semibold">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredExpenses.map(expense => (
+                    <tr key={expense.id} className="border-t border-latte/10 hover:bg-cream/50">
+                      <td className="px-4 lg:px-6 py-4 text-sm text-medium-roast whitespace-nowrap">
+                        {new Date(expense.date).toLocaleDateString('en-MY', { day: '2-digit', month: 'short', year: 'numeric' })}
+                        <span className="text-latte"> · </span>
+                        {new Date(expense.date).toLocaleTimeString('en-MY', { hour: '2-digit', minute: '2-digit' })}
+                      </td>
+                      <td className="px-4 lg:px-6 py-4"><span className="inline-block px-3 py-1 rounded-full text-xs font-medium bg-error/10 text-error whitespace-nowrap">{categoryName(expense.categoryId)}</span></td>
+                      <td className="px-4 lg:px-6 py-4">
+                        <span className="font-medium break-words">{expense.description || '—'}</span>
+                        {expense.createdBy && <span className="text-xs text-latte block break-words">{expense.createdBy}</span>}
+                      </td>
+                      <td className="px-4 lg:px-6 py-4 text-right font-mono font-semibold text-error whitespace-nowrap">{formatPrice(expense.amount)}</td>
+                      <td className="px-4 lg:px-6 py-4">
+                        <div className="flex justify-end gap-2">
+                          <button onClick={() => openEditModal(expense)} aria-label="Edit expense" className="p-2 hover:bg-latte/20 rounded-lg"><Edit className="w-4 h-4 text-medium-roast" /></button>
+                          <button onClick={() => handleDelete(expense)} aria-label="Delete expense" className="p-2 hover:bg-error/10 rounded-lg"><Trash2 className="w-4 h-4 text-error" /></button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </>
+      )}
       
       {/* Add/Edit Expense Modal */}
       <AnimatePresence>{showModal && (
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={() => setShowModal(false)}>
-          <motion.div initial={{ scale: 0.95 }} animate={{ scale: 1 }} exit={{ scale: 0.95 }} className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6" onClick={e => e.stopPropagation()}>
+          <motion.div initial={{ scale: 0.95 }} animate={{ scale: 1 }} exit={{ scale: 0.95 }} className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-4 sm:p-6" onClick={e => e.stopPropagation()}>
             <h2 className="text-xl font-display font-bold mb-6">{editingExpense ? t('editExpense', language) : t('addExpense', language)}</h2>
             <div className="space-y-4">
               <div>
@@ -2200,9 +2360,9 @@ function ProfitLossView({ language, state }) {
   ];
   
   return (
-    <div className="p-6">
-      <div className="flex items-center justify-between mb-6">
-        <h1 className="text-2xl font-display font-bold text-dark-roast flex items-center gap-3">
+    <div className="p-3 sm:p-6">
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-6">
+        <h1 className="text-xl sm:text-2xl font-display font-bold text-dark-roast flex items-center gap-2 sm:gap-3 min-w-0">
           <TrendingDown className="w-7 h-7" />
           {t('profitAndLoss', language)}
         </h1>
@@ -2274,7 +2434,7 @@ function ProfitLossView({ language, state }) {
       
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Sales vs Expenses per day */}
-        <div className="bg-white rounded-2xl p-6 shadow-sm">
+        <div className="bg-white rounded-2xl p-4 sm:p-6 shadow-sm">
           <div className="flex items-center justify-between mb-4">
             <h2 className="font-semibold text-dark-roast">{t('salesVsExpenses', language)}</h2>
             <div className="flex items-center gap-3 text-xs text-medium-roast">
@@ -2285,7 +2445,8 @@ function ProfitLossView({ language, state }) {
           {totalSales === 0 && totalExpenses === 0 ? (
             <p className="text-medium-roast text-center py-12">{t('noData', language)}</p>
           ) : (
-            <div className="h-52 flex items-end gap-1 overflow-x-auto">
+            <>
+            <div className="h-52 flex items-end gap-1 overflow-x-auto scroll-smooth">
               {daily.map((d, index) => (
                 <div key={d.dayStart} className="flex-1 min-w-[14px] flex flex-col items-center gap-1">
                   <div className="w-full flex items-end justify-center gap-0.5 h-40">
@@ -2310,11 +2471,17 @@ function ProfitLossView({ language, state }) {
                 </div>
               ))}
             </div>
+            {daily.length > 15 && (
+              <p className="sm:hidden mt-2 text-[11px] text-medium-roast text-center">
+                Swipe the chart sideways to see all {daily.length} days →
+              </p>
+            )}
+            </>
           )}
         </div>
         
         {/* Expenses by category */}
-        <div className="bg-white rounded-2xl p-6 shadow-sm">
+        <div className="bg-white rounded-2xl p-4 sm:p-6 shadow-sm">
           <h2 className="font-semibold text-dark-roast mb-4">{t('expensesByCategory', language)}</h2>
           {byCategory.length === 0 ? (
             <p className="text-medium-roast text-center py-12">{t('noData', language)}</p>

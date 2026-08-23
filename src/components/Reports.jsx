@@ -142,7 +142,7 @@ export default function Reports() {
       </div>
       
       {/* Content */}
-      <div className="flex-1 overflow-auto p-6">
+      <div className="flex-1 overflow-auto p-3 sm:p-6">
         <div className="max-w-6xl mx-auto space-y-6">
           {/* Summary Cards */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -179,16 +179,20 @@ export default function Reports() {
           {/* Charts Row */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             {/* Hourly Sales Chart */}
-            <div className="bg-white rounded-2xl p-6 shadow-sm">
+            <div className="bg-white rounded-2xl p-4 sm:p-6 shadow-sm">
               <h3 className="font-semibold text-dark-roast mb-4 flex items-center gap-2">
                 <Clock className="w-5 h-5 text-medium-roast" />
                 Sales by Hour
               </h3>
-              <div className="h-48 flex items-end gap-1">
+              {/* 12 bars: on phones the value labels are dropped (they overlap at
+                  ~27px per bar) and the row scrolls horizontally with a wider
+                  minimum, so each bar stays tappable/readable. */}
+              <div className="overflow-x-auto -mx-1 px-1">
+              <div className="h-48 flex items-end gap-1 min-w-[420px] sm:min-w-0">
                 {hourlyData.map((hour, index) => (
-                  <div key={index} className="flex-1 flex flex-col items-center gap-2">
+                  <div key={index} className="flex-1 flex flex-col items-center gap-2 min-w-0">
                     <div className="w-full flex flex-col items-center">
-                      <span className="text-xs text-medium-roast mb-1">
+                      <span className="hidden sm:block text-xs text-medium-roast mb-1 truncate max-w-full">
                         {formatPrice(hour.sales).replace('RM ', '')}
                       </span>
                       <motion.div
@@ -198,14 +202,15 @@ export default function Reports() {
                         className="w-full bg-gradient-to-t from-accent to-accent/60 rounded-t-md min-h-[4px]"
                       />
                     </div>
-                    <span className="text-xs text-medium-roast">{hour.hour}</span>
+                    <span className="text-[10px] sm:text-xs text-medium-roast whitespace-nowrap">{hour.hour}</span>
                   </div>
                 ))}
+              </div>
               </div>
             </div>
             
             {/* Top Selling Items */}
-            <div className="bg-white rounded-2xl p-6 shadow-sm">
+            <div className="bg-white rounded-2xl p-4 sm:p-6 shadow-sm">
               <h3 className="font-semibold text-dark-roast mb-4 flex items-center gap-2">
                 <TrendingUp className="w-5 h-5 text-medium-roast" />
                 Top Selling Items
@@ -241,7 +246,7 @@ export default function Reports() {
           </div>
           
           {/* Payment Methods */}
-          <div className="bg-white rounded-2xl p-6 shadow-sm">
+          <div className="bg-white rounded-2xl p-4 sm:p-6 shadow-sm">
             <h3 className="font-semibold text-dark-roast mb-4">Sales by Payment Method</h3>
             <div className="grid grid-cols-3 gap-4">
               {[
@@ -264,7 +269,7 @@ export default function Reports() {
           </div>
           
           {/* Recent Transactions */}
-          <div className="bg-white rounded-2xl p-6 shadow-sm">
+          <div className="bg-white rounded-2xl p-4 sm:p-6 shadow-sm">
             <div className="flex items-center justify-between mb-4">
               <h3 className="font-semibold text-dark-roast">Recent Transactions</h3>
               <button
