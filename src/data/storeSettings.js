@@ -22,6 +22,9 @@ export const defaultStoreSettings = {
   // Default on: servers can view and maintain every table/walk-in order.
   // Turn off to restrict each server to orders created by their own account.
   serverCanViewAllOrders: true,
+  // Default off: overriding a menu price is a discount by another name, so
+  // servers must be granted it explicitly. Admins and Managers always may.
+  serverCanEditPrice: false,
 };
 
 // Load settings from localStorage

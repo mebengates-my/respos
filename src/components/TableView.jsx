@@ -114,16 +114,34 @@ export default function TableView() {
   };
   
   const clearTable = async (table) => {
+    // A table is only truly free once its unpaid order is gone too. Freeing the
+    // seat while the order lives on just makes the table flip back to occupied
+    // the next time open orders sync, so remove the order in the same step.
+    const attachedOrder = openOrders.find(item => item.tableId === table.id);
+
     const ok = await confirm({
-      title: 'Clear table?',
-      message: `Free up Table ${table.number}? (mark as available)`,
-      confirmLabel: 'Clear',
+      title: attachedOrder ? 'Clear table and remove order?' : 'Clear table?',
+      message: attachedOrder
+        ? `Table ${table.number} still has an unpaid order for ${formatPrice(attachedOrder.total)}. Clearing removes that order for everyone and cannot be undone.`
+        : `Free up Table ${table.number}? (mark as available)`,
+      confirmLabel: attachedOrder ? 'Remove order and clear' : 'Clear',
       danger: true,
     });
-    if (ok) {
-      actions.updateTableStatus(table.id, 'available');
-      actions.addToast(`Table ${table.number} cleared`, 'info');
+    if (!ok) return;
+
+    if (attachedOrder) {
+      const result = await actions.cancelOpenOrder(attachedOrder);
+      if (!result.ok) {
+        actions.addToast(result.error?.message || 'Could not remove the order on this table', 'error');
+        return;
+      }
     }
+
+    actions.updateTableStatus(table.id, 'available');
+    actions.addToast(
+      attachedOrder ? `Table ${table.number} cleared and order removed` : `Table ${table.number} cleared`,
+      'info'
+    );
   };
   
   const handleAction = (table, action) => {

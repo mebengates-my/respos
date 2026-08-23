@@ -36,6 +36,7 @@ const ACTIONS = {
   SET_LANGUAGE: 'SET_LANGUAGE',
   SET_TAX_SETTINGS: 'SET_TAX_SETTINGS',
   SET_SERVER_ORDER_VISIBILITY: 'SET_SERVER_ORDER_VISIBILITY',
+  SET_SERVER_PRICE_ACCESS: 'SET_SERVER_PRICE_ACCESS',
   
   // Views
   SET_VIEW: 'SET_VIEW',
@@ -116,23 +117,22 @@ export const SESSION_STORAGE_KEY = 'cafe-pos-session';
 // id + the selected store id. Re-validated against the backend on load.
 export const CLOUD_SESSION_STORAGE_KEY = 'cafe-pos-session-cloud';
 
-// Initial users (staff)
+// Initial users (staff). One account per role so every permission path can be
+// tried on a fresh install; the owner renames these and adds their real staff
+// in Admin > Users. Keep the admin account here or a new store cannot log in.
 const defaultUsers = [
   { id: 'admin-1', name: 'Admin User', role: 'admin', pin: '1234', active: true },
-  { id: 'manager-1', name: 'Nadia Rahman', role: 'manager', pin: '5555', active: true },
-  { id: 'server-1', name: 'Maria Santos', role: 'server', pin: '1111', active: true },
-  { id: 'server-2', name: 'Ahmad Khan', role: 'server', pin: '2222', active: true },
-  { id: 'server-3', name: 'Sarah Lee', role: 'server', pin: '3333', active: true },
+  { id: 'manager-1', name: 'Manager', role: 'manager', pin: '5555', active: true },
+  { id: 'server-1', name: 'Server', role: 'server', pin: '1111', active: true },
 ];
 
-// Initial expense categories (business costs, separate from menu categories)
+// Initial expense categories (business costs, separate from menu categories).
+// A short starter set; the owner adds their own in Admin > Expenses.
 const defaultExpenseCategories = [
   { id: 'exp-cat-rent', name: 'Rent' },
   { id: 'exp-cat-salaries', name: 'Salaries' },
   { id: 'exp-cat-ingredients', name: 'Ingredients & Supplies' },
   { id: 'exp-cat-utilities', name: 'Utilities' },
-  { id: 'exp-cat-marketing', name: 'Marketing' },
-  { id: 'exp-cat-maintenance', name: 'Maintenance' },
   { id: 'exp-cat-other', name: 'Other' },
 ];
 
@@ -167,6 +167,10 @@ const initialState = {
   // Admin/Manager setting. It defaults to showing every open order; when off,
   // servers only receive orders created by their own account.
   serverCanViewAllOrders: initialStoreSettings.serverCanViewAllOrders !== false,
+  // Admin/Manager setting. Off by default: servers charge the menu price
+  // unless the store explicitly lets them override it. Never restricts
+  // Admins or Managers, who can always adjust a line price.
+  serverCanEditPrice: initialStoreSettings.serverCanEditPrice === true,
   
   // Tables. The counter represents a walk-in customer and is selected by
   // default, so a server can start a walk-in order immediately.
@@ -315,6 +319,9 @@ function appReducer(state, action) {
           : state.openOrders,
       };
     }
+
+    case ACTIONS.SET_SERVER_PRICE_ACCESS:
+      return { ...state, serverCanEditPrice: action.payload === true };
 
     // Keep order math in step with Admin → Settings → Tax & Currency.
     case ACTIONS.SET_TAX_SETTINGS: {
@@ -639,7 +646,10 @@ function appReducer(state, action) {
       const existingIndex = state.currentOrder?.items.findIndex(
         item => item.menuItemId === menuItem.id &&
         JSON.stringify(item.modifiers) === JSON.stringify(selectedModifiers || []) &&
-        item.specialInstructions === specialInstructions
+        item.specialInstructions === specialInstructions &&
+        // A line whose price was overridden must not silently absorb a newly
+        // added one at menu price — that would give away the discount twice.
+        item.price === menuItem.price
       );
       
       let newItems;
@@ -1071,6 +1081,10 @@ export function AppProvider({ children }) {
           type: ACTIONS.SET_SERVER_ORDER_VISIBILITY,
           payload: fresh.serverCanViewAllOrders,
         });
+        dispatch({
+          type: ACTIONS.SET_SERVER_PRICE_ACCESS,
+          payload: fresh.serverCanEditPrice,
+        });
         return;
       }
 
@@ -1181,6 +1195,10 @@ export function AppProvider({ children }) {
         type: ACTIONS.SET_SERVER_ORDER_VISIBILITY,
         payload: merged.serverCanViewAllOrders,
       });
+      dispatch({
+        type: ACTIONS.SET_SERVER_PRICE_ACCESS,
+        payload: merged.serverCanEditPrice,
+      });
       // The RLS result set changes with this switch. Refetch now so turning it
       // on reveals allowed orders and turning it off purges disallowed ones.
       cloudOrders.listOpen(storeId).then(({ data, error }) => {
@@ -1262,7 +1280,40 @@ export function AppProvider({ children }) {
       return () => clearTimeout(timeoutId);
     }
   }, [state.toasts]);
-  
+
+  // Remove a *placed* (submitted, unpaid) order everywhere: the shared cloud
+  // row, the open-orders board and the floor plan. Used by every "remove this
+  // order" affordance — the board's cancel button, and the POS clear/void
+  // buttons while a manager has a placed order open for editing. Voiding is
+  // deliberately a soft delete: the order lands in history as `voided` so the
+  // reports still show what was thrown away and by whom.
+  const removePlacedOrder = useCallback(async (order) => {
+    if (!order) return { ok: false, error: { message: 'Order not found' } };
+    const stored = state.openOrders.find(item => item.id === order.id) || order;
+    const storeId = state.currentUser?.storeId || state.cloudSession?.storeId;
+    let cancelled = {
+      ...stored,
+      cloudId: stored.cloudId || order.cloudId,
+      status: 'voided',
+      voidedAt: Date.now(),
+      voidedBy: state.currentUser?.name,
+    };
+    if (isCloudEnabled && state.currentUser?.cloud && storeId) {
+      const { data, error } = await cloudOrders.void({ storeId, order: cancelled });
+      // Without the cloud write the row would reappear on the next realtime
+      // refresh, so a failure must stop the local removal too.
+      if (error) return { ok: false, error };
+      cancelled = {
+        ...cancelled,
+        ...data,
+        serverName: stored.serverName || order.serverName,
+        voidedBy: state.currentUser?.name,
+      };
+    }
+    dispatch({ type: ACTIONS.CANCEL_OPEN_ORDER, payload: cancelled });
+    return { ok: true };
+  }, [state.openOrders, state.currentUser, state.cloudSession]);
+
   // Action creators
   const actions = {
     // Auth
@@ -1301,6 +1352,10 @@ export function AppProvider({ children }) {
 
     setServerOrderVisibility: useCallback((canViewAll) => {
       dispatch({ type: ACTIONS.SET_SERVER_ORDER_VISIBILITY, payload: canViewAll });
+    }, []),
+
+    setServerPriceAccess: useCallback((canEditPrice) => {
+      dispatch({ type: ACTIONS.SET_SERVER_PRICE_ACCESS, payload: canEditPrice });
     }, []),
 
     setLanguage: useCallback((lang) => {
@@ -1448,9 +1503,20 @@ export function AppProvider({ children }) {
       dispatch({ type: ACTIONS.REMOVE_ITEM, payload: itemId } );
     }, []),
     
-    clearOrder: useCallback(() => {
-      dispatch({ type: ACTIONS.CLEAR_ORDER });
-    }, []),
+    // Clearing a *draft* only wipes this screen. Clearing an order that was
+    // already placed must also take it off the open-orders board (and out of
+    // the shared cloud store) — otherwise the order the manager just cleared
+    // keeps sitting there as unpaid work.
+    clearOrder: useCallback(async () => {
+      const draft = state.currentOrder;
+      const placed = draft && state.openOrders.some(order => order.id === draft.id);
+      if (!placed) {
+        dispatch({ type: ACTIONS.CLEAR_ORDER });
+        return { ok: true, removed: false };
+      }
+      const result = await removePlacedOrder(draft);
+      return result.ok ? { ok: true, removed: true } : result;
+    }, [state.currentOrder, state.openOrders, removePlacedOrder]),
     
     applyDiscount: useCallback((discount) => {
       dispatch({ type: ACTIONS.APPLY_DISCOUNT, payload: discount });
@@ -1516,18 +1582,17 @@ export function AppProvider({ children }) {
       dispatch({ type: ACTIONS.EDIT_OPEN_ORDER, payload: order });
     }, []),
 
-    cancelOpenOrder: useCallback(async (order) => {
-      if (!order) return { ok: false, error: { message: 'Order not found' } };
-      const storeId = state.currentUser?.storeId || state.cloudSession?.storeId;
-      let cancelled = { ...order, status: 'voided', voidedAt: Date.now() };
-      if (isCloudEnabled && state.currentUser?.cloud && storeId) {
-        const { data, error } = await cloudOrders.void({ storeId, order });
-        if (error) return { ok: false, error };
-        cancelled = { ...cancelled, ...data, serverName: order.serverName };
-      }
-      dispatch({ type: ACTIONS.CANCEL_OPEN_ORDER, payload: cancelled });
-      return { ok: true };
-    }, [state.currentUser, state.cloudSession]),
+    // Remove a placed (unpaid) order from the board for good.
+    cancelOpenOrder: useCallback((order) => removePlacedOrder(order), [removePlacedOrder]),
+
+    // Open a placed order in the POS and jump straight to the payment screen.
+    // Managers/admins use this from the open-orders board to collect money
+    // without re-keying the order.
+    collectPaymentForOrder: useCallback((order) => {
+      if (!order) return;
+      dispatch({ type: ACTIONS.EDIT_OPEN_ORDER, payload: order });
+      dispatch({ type: ACTIONS.SET_PAYMENT_MODAL, payload: { open: true, method: null } });
+    }, []),
     
     processPayment: useCallback((method, amountPaid, change) => {
       const order = state.currentOrder;
@@ -1546,13 +1611,18 @@ export function AppProvider({ children }) {
       }
     }, [state.currentOrder, state.currentUser, state.cloudSession]),
     
-    voidOrder: useCallback(() => {
-      if (state.currentOrder) {
-        dispatch({ type: ACTIONS.VOID_ORDER });
-        return true;
+    // Void the order on screen. A placed order goes through the shared path so
+    // the board and the cloud row are cleared as well; an unsubmitted draft
+    // only exists on this device and is voided locally.
+    voidOrder: useCallback(async () => {
+      const draft = state.currentOrder;
+      if (!draft) return { ok: false, error: { message: 'No order to void' } };
+      if (state.openOrders.some(order => order.id === draft.id)) {
+        return removePlacedOrder(draft);
       }
-      return false;
-    }, [state.currentOrder]),
+      dispatch({ type: ACTIONS.VOID_ORDER });
+      return { ok: true };
+    }, [state.currentOrder, state.openOrders, removePlacedOrder]),
     
     // Modals
     openPaymentModal: useCallback((method = null) => {

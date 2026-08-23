@@ -3,6 +3,7 @@ import { useApp } from '../context/AppContext';
 import { t } from '../data/language';
 import { useConfirm } from './ConfirmDialog';
 import { navigate } from '../utils/router';
+import { visibleOpenOrders } from '../utils/orderAccess';
 import {
   Coffee,
   Wifi,
@@ -21,7 +22,11 @@ export default function Header() {
   const { state, actions } = useApp();
   const confirm = useConfirm();
   const { currentUser, view, language, isOffline } = state;
-  
+
+  // Only count the orders this user is actually allowed to see, so the badge
+  // always matches the list behind it.
+  const openOrderCount = visibleOpenOrders(state).length;
+
   const isAdmin = currentUser?.role === 'admin';
   const isManager = currentUser?.role === 'manager';
   const isServer = currentUser?.role === 'server';
@@ -72,14 +77,15 @@ export default function Header() {
           active={view === 'tables'}
           onClick={() => actions.setView('tables')}
         />
-        {isServer && (
-          <NavButton
-            icon={<ClipboardList className="w-4 h-4" />}
-            label="Current Orders"
-            active={view === 'orders'}
-            onClick={() => actions.setView('orders')}
-          />
-        )}
+        {/* Open orders sits next to POS and Tables for every role: servers see
+            their tickets, managers/admins open one and collect payment. */}
+        <NavButton
+          icon={<ClipboardList className="w-4 h-4" />}
+          label={t('openOrders', language)}
+          active={view === 'orders'}
+          onClick={() => actions.setView('orders')}
+          badge={openOrderCount}
+        />
         {/* Reports are for admins and managers. */}
         {!isServer && (
           <NavButton
@@ -150,11 +156,12 @@ export default function Header() {
   );
 }
 
-function NavButton({ icon, label, active, onClick }) {
+function NavButton({ icon, label, active, onClick, badge }) {
+  const showBadge = Number(badge) > 0;
   return (
     <button
       onClick={onClick}
-      className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all touch-persist btn-press ${
+      className={`relative flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all touch-persist btn-press ${
         active
           ? 'bg-accent text-white shadow-lg'
           : 'bg-transparent hover:bg-latte/30 text-latte hover:text-white'
@@ -162,6 +169,18 @@ function NavButton({ icon, label, active, onClick }) {
     >
       {icon}
       <span className="hidden lg:inline">{label}</span>
+      {/* Live count of waiting orders. On narrow screens the label is hidden,
+          so the badge floats over the icon instead of sitting beside it. */}
+      {showBadge && (
+        <span
+          className={`min-w-5 h-5 px-1.5 flex items-center justify-center rounded-full text-xs font-bold tabular-nums
+            absolute -top-1 -right-1 lg:static lg:top-auto lg:right-auto ${
+              active ? 'bg-white text-accent' : 'bg-accent text-white'
+            }`}
+        >
+          {badge}
+        </span>
+      )}
     </button>
   );
 }

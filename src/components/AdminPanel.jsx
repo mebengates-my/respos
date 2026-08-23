@@ -79,8 +79,11 @@ export default function AdminPanel() {
   const confirm = useConfirm();
   const { language, users, currentUser } = state;
   const isManager = currentUser?.role === 'manager';
-  // Start every management session on the operational overview rather than Settings.
-  const [currentView, setCurrentView] = useState(AdminViews.DASHBOARD);
+  // Managers run the floor, so their panel opens straight on the live open-orders
+  // board — the list they act on all shift. Admins still land on the Dashboard.
+  const [currentView, setCurrentView] = useState(
+    isManager ? AdminViews.OPEN_ORDERS : AdminViews.DASHBOARD
+  );
 
   // Cloud (Supabase) mode: staff are real auth users, not the local demo list.
   // Fetch the store roster once so Dashboard and User Management show the truth
@@ -1306,6 +1309,7 @@ function StoreSettingsView({ state, actions }) {
         settingsToSave = {
           ...data,
           serverCanViewAllOrders: settings.serverCanViewAllOrders !== false,
+          serverCanEditPrice: settings.serverCanEditPrice === true,
         };
         const { error } = await cloudAuth.updateServerOrderVisibility(
           storeId,
@@ -1313,6 +1317,14 @@ function StoreSettingsView({ state, actions }) {
         );
         if (error) {
           actions.addToast(error.message || 'Could not save shared settings', 'error');
+          return;
+        }
+        const { error: priceError } = await cloudAuth.updateServerPriceAccess(
+          storeId,
+          settingsToSave.serverCanEditPrice
+        );
+        if (priceError) {
+          actions.addToast(priceError.message || 'Could not save shared settings', 'error');
           return;
         }
       } else {
@@ -1332,6 +1344,7 @@ function StoreSettingsView({ state, actions }) {
       taxEnabled: settingsToSave.taxEnabled,
     });
     actions.setServerOrderVisibility(settingsToSave.serverCanViewAllOrders !== false);
+    actions.setServerPriceAccess(settingsToSave.serverCanEditPrice === true);
 
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
@@ -1353,6 +1366,7 @@ function StoreSettingsView({ state, actions }) {
         taxEnabled: defaultStoreSettings.taxEnabled,
       });
       actions.setServerOrderVisibility(defaultStoreSettings.serverCanViewAllOrders);
+      actions.setServerPriceAccess(defaultStoreSettings.serverCanEditPrice);
       if (state.currentUser?.cloud && storeId && cloudAuth.isEnabled) {
         const { error } = await cloudAuth.updateStoreSettings(storeId, defaultStoreSettings);
         if (error) {
@@ -1423,13 +1437,14 @@ function StoreSettingsView({ state, actions }) {
         setSettings(restored);
         actions.setTaxSettings({ taxRate: restored.taxRate, taxEnabled: restored.taxEnabled });
         actions.setServerOrderVisibility(restored.serverCanViewAllOrders);
+        actions.setServerPriceAccess(restored.serverCanEditPrice);
       }
       actions.addToast('Backup restored', 'success');
     };
     reader.readAsText(file);
   };
 
-  // Managers get only the operational permission requested here; Admin-only
+  // Managers get only the operational permissions requested here; Admin-only
   // business, backup and danger-zone settings remain hidden.
   if (isManager) {
     return (
@@ -1708,39 +1723,63 @@ function StoreSettingsView({ state, actions }) {
   );
 }
 
+// One row inside the permissions card: label, explanation and a switch.
+function PermissionToggle({ label, description, enabled, onToggle, ariaLabel }) {
+  return (
+    <div className="flex items-center justify-between gap-6">
+      <div>
+        <p className="font-medium text-dark-roast">{label}</p>
+        <p className="text-sm text-medium-roast mt-1">{description}</p>
+      </div>
+      <button
+        aria-label={ariaLabel}
+        aria-pressed={enabled}
+        onClick={onToggle}
+        className={`relative w-14 h-8 rounded-full transition-colors shrink-0 ${
+          enabled ? 'bg-success' : 'bg-latte/30'
+        }`}
+      >
+        <div className={`absolute top-1 w-6 h-6 bg-white rounded-full shadow transition-all ${
+          enabled ? 'left-7' : 'left-1'
+        }`} />
+      </button>
+    </div>
+  );
+}
+
 function ServerOrderAccessCard({ settings, setSettings }) {
   const canViewAll = settings.serverCanViewAllOrders !== false;
+  // Price overrides are opt-in: a server changing a price is effectively an
+  // unlogged discount, so the store has to grant it deliberately.
+  const canEditPrice = settings.serverCanEditPrice === true;
   return (
     <div className="bg-white rounded-2xl shadow-sm overflow-hidden border border-accent/20">
       <div className="p-4 bg-accent/10">
         <h2 className="font-semibold flex items-center gap-2">
-          <ClipboardList className="w-5 h-5 text-accent" /> Server Order Access
+          <ClipboardList className="w-5 h-5 text-accent" /> Server Permissions
         </h2>
       </div>
-      <div className="p-6">
-        <div className="flex items-center justify-between gap-6">
-          <div>
-            <p className="font-medium text-dark-roast">Servers can see all open orders</p>
-            <p className="text-sm text-medium-roast mt-1">
-              On: servers can view and edit every table and walk-in order. Off: each
-              server only sees orders placed by their own account.
-            </p>
-          </div>
-          <button
-            aria-label="Toggle server access to all open orders"
-            aria-pressed={canViewAll}
-            onClick={() => setSettings({ ...settings, serverCanViewAllOrders: !canViewAll })}
-            className={`relative w-14 h-8 rounded-full transition-colors shrink-0 ${
-              canViewAll ? 'bg-success' : 'bg-latte/30'
-            }`}
-          >
-            <div className={`absolute top-1 w-6 h-6 bg-white rounded-full shadow transition-all ${
-              canViewAll ? 'left-7' : 'left-1'
-            }`} />
-          </button>
-        </div>
-        <p className="text-xs text-medium-roast mt-3">
-          Default: all open orders are visible. Press Save Changes to apply.
+      <div className="p-6 space-y-6">
+        <PermissionToggle
+          label="Servers can see all open orders"
+          description="On: servers can view and edit every table and walk-in order. Off: each server only sees orders placed by their own account."
+          enabled={canViewAll}
+          ariaLabel="Toggle server access to all open orders"
+          onToggle={() => setSettings({ ...settings, serverCanViewAllOrders: !canViewAll })}
+        />
+
+        <div className="border-t border-latte/20" />
+
+        <PermissionToggle
+          label="Servers can change item prices"
+          description="On: servers can override the price of a line in the cart. Off: they charge the menu price. Admins and Managers can always change prices."
+          enabled={canEditPrice}
+          ariaLabel="Toggle server permission to change item prices"
+          onToggle={() => setSettings({ ...settings, serverCanEditPrice: !canEditPrice })}
+        />
+
+        <p className="text-xs text-medium-roast">
+          Press Save Changes to apply. These settings are shared by every device in the store.
         </p>
       </div>
     </div>

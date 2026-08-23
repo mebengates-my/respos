@@ -16,7 +16,8 @@ import {
   Percent,
   Send,
   LoaderCircle,
-  Footprints
+  Footprints,
+  Pencil
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useConfirm } from './ConfirmDialog';
@@ -37,6 +38,7 @@ export default function OrderPanel() {
     tables,
     deliveryChannels,
     currentUser,
+    serverCanEditPrice,
   } = state;
   const confirm = useConfirm();
   const [showDiscounts, setShowDiscounts] = useState(false);
@@ -47,6 +49,9 @@ export default function OrderPanel() {
   
   // Servers only take orders — collecting money is reserved for Admin/Manager.
   const isServer = currentUser?.role === 'server';
+  // Admins and Managers can always adjust a line price; servers only when the
+  // store has switched the permission on in Manager/Admin → Settings.
+  const canEditItemPrice = !isServer || serverCanEditPrice === true;
   
   const isEmpty = !currentOrder || currentOrder.items.length === 0;
   const accessibleOpenOrders = visibleOpenOrders(state);
@@ -95,18 +100,27 @@ export default function OrderPanel() {
     }
   };
   
+  // Once an order has been placed it lives on the open-orders board, so
+  // clearing it is a removal that everybody sees — say so in the prompt.
+  const isPlacedOrder = Boolean(currentOrder && openOrders.some(order => order.id === currentOrder.id));
+
   const handleClearOrder = async () => {
     if (currentOrder && currentOrder.items.length > 0) {
       const ok = await confirm({
-        title: 'Clear order?',
-        message: 'Clear all items from this order? This cannot be undone.',
-        confirmLabel: 'Clear',
+        title: isPlacedOrder ? 'Remove placed order?' : 'Clear order?',
+        message: isPlacedOrder
+          ? 'This order has already been placed. Removing it takes it off the open orders list for everyone. This cannot be undone.'
+          : 'Clear all items from this order? This cannot be undone.',
+        confirmLabel: isPlacedOrder ? 'Remove order' : 'Clear',
         danger: true,
       });
-      if (ok) {
-        actions.clearOrder();
-        actions.addToast('Order cleared', 'info');
+      if (!ok) return;
+      const result = await actions.clearOrder();
+      if (result?.ok === false) {
+        actions.addToast(result.error?.message || 'Could not clear order', 'error');
+        return;
       }
+      actions.addToast(result?.removed ? 'Order removed from open orders' : 'Order cleared', 'info');
     }
   };
   
@@ -114,14 +128,19 @@ export default function OrderPanel() {
     if (currentOrder && currentOrder.items.length > 0) {
       const ok = await confirm({
         title: 'Void order?',
-        message: 'Void this entire order?',
+        message: isPlacedOrder
+          ? 'Void this order and remove it from the open orders list?'
+          : 'Void this entire order?',
         confirmLabel: 'Void',
         danger: true,
       });
-      if (ok) {
-        actions.voidOrder();
-        actions.addToast('Order voided', 'error');
+      if (!ok) return;
+      const result = await actions.voidOrder();
+      if (result?.ok === false) {
+        actions.addToast(result.error?.message || 'Could not void order', 'error');
+        return;
       }
+      actions.addToast('Order voided', 'error');
     }
   };
   
@@ -182,13 +201,17 @@ export default function OrderPanel() {
               >
                 <StickyNote className="w-5 h-5" />
               </button>
-              <button
-                onClick={handleClearOrder}
-                className="p-2 rounded-lg hover:bg-error/10 text-medium-roast hover:text-error transition-colors"
-                title="Clear order"
-              >
-                <Trash2 className="w-5 h-5" />
-              </button>
+              {/* Removing an order that is already on the board is an
+                  Admin/Manager authority; servers may only clear their draft. */}
+              {(!isPlacedOrder || !isServer) && (
+                <button
+                  onClick={handleClearOrder}
+                  className="p-2 rounded-lg hover:bg-error/10 text-medium-roast hover:text-error transition-colors"
+                  title={isPlacedOrder ? 'Remove placed order' : 'Clear order'}
+                >
+                  <Trash2 className="w-5 h-5" />
+                </button>
+              )}
             </div>
           )}
         </div>
@@ -249,16 +272,17 @@ export default function OrderPanel() {
       </div>
       
       {/* Order items */}
-      <div className="flex-1 overflow-y-auto p-4">
+      <div className="flex-1 overflow-y-auto p-3">
         {isEmpty ? (
           <EmptyOrderState />
         ) : (
-          <div className="space-y-3">
+          <div className="space-y-2">
             <AnimatePresence mode="popLayout">
               {currentOrder.items.map(item => (
                 <OrderItemRow
                   key={item.id}
                   item={item}
+                  canEditPrice={canEditItemPrice}
                   onUpdate={(updates) => actions.updateItem(item.id, updates)}
                   onRemove={() => actions.removeItem(item.id)}
                 />
@@ -317,9 +341,10 @@ export default function OrderPanel() {
         )}
       </AnimatePresence>
       
-      {/* Summary */}
-      <div className="p-4 border-t border-latte/20 bg-cream">
-        <div className="space-y-2 mb-4">
+      {/* Summary. Padding and gaps tighten on short/small screens so the
+          Place Order and payment buttons stay visible without scrolling. */}
+      <div className="p-3 lg:p-4 border-t border-latte/20 bg-cream">
+        <div className="space-y-1 lg:space-y-2 mb-3">
           <div className="flex justify-between text-sm text-medium-roast">
             <span>Subtotal</span>
             <span className="font-mono">
@@ -378,11 +403,11 @@ export default function OrderPanel() {
         {/* Hold/void tools are for managers. Servers submit with the clear,
             explicit Place Order button below. */}
         {!isServer && (
-          <div className="grid grid-cols-3 gap-2 mb-3">
+          <div className="grid grid-cols-3 gap-2 mb-2">
             <button
               onClick={() => setShowDiscounts(!showDiscounts)}
               disabled={isEmpty}
-              className={`flex items-center justify-center gap-1 px-3 py-3 rounded-xl font-medium transition-colors btn-press ${
+              className={`flex items-center justify-center gap-1 px-3 py-2 rounded-xl font-medium transition-colors btn-press ${
                 isEmpty
                   ? 'bg-latte/20 text-latte cursor-not-allowed'
                   : 'bg-latte/10 text-espresso hover:bg-latte/20'
@@ -393,7 +418,7 @@ export default function OrderPanel() {
             <button
               onClick={handleHoldOrder}
               disabled={isEmpty}
-              className={`flex items-center justify-center gap-1 px-3 py-3 rounded-xl font-medium transition-colors btn-press ${
+              className={`flex items-center justify-center gap-1 px-3 py-2 rounded-xl font-medium transition-colors btn-press ${
                 isEmpty
                   ? 'bg-latte/20 text-latte cursor-not-allowed'
                   : 'bg-warning/10 text-warning hover:bg-warning/20'
@@ -404,7 +429,7 @@ export default function OrderPanel() {
             <button
               onClick={handleVoidOrder}
               disabled={isEmpty}
-              className={`flex items-center justify-center gap-1 px-3 py-3 rounded-xl font-medium transition-colors btn-press ${
+              className={`flex items-center justify-center gap-1 px-3 py-2 rounded-xl font-medium transition-colors btn-press ${
                 isEmpty
                   ? 'bg-latte/20 text-latte cursor-not-allowed'
                   : 'bg-error/10 text-error hover:bg-error/20'
@@ -421,7 +446,7 @@ export default function OrderPanel() {
         <button
           onClick={handlePlaceOrder}
           disabled={isEmpty || isSubmitting}
-          className={`w-full flex items-center justify-center gap-2 px-4 py-4 rounded-xl font-semibold text-lg transition-all btn-press ${
+          className={`w-full flex items-center justify-center gap-2 px-4 py-3 rounded-xl font-semibold text-lg transition-all btn-press ${
             isEmpty || isSubmitting
               ? 'bg-latte/30 text-latte cursor-not-allowed'
               : 'bg-accent text-white hover:bg-accent/90 shadow-lg shadow-accent/30'
@@ -443,40 +468,40 @@ export default function OrderPanel() {
             <button
               onClick={() => actions.openPaymentModal('cash')}
               disabled={isEmpty}
-              className={`flex flex-col items-center justify-center gap-1 px-4 py-4 rounded-xl font-semibold transition-all btn-press ${
+              className={`flex flex-row lg:flex-col items-center justify-center gap-1.5 lg:gap-1 px-2 py-3 rounded-xl font-semibold transition-all btn-press ${
                 isEmpty
                   ? 'bg-latte/20 text-latte cursor-not-allowed'
                   : 'bg-success text-white hover:bg-success/90 shadow-lg shadow-success/30'
               }`}
             >
-              <Banknote className="w-6 h-6" />
-              <span>Cash</span>
+              <Banknote className="w-5 h-5 lg:w-6 lg:h-6 shrink-0" />
+              <span className="text-sm lg:text-base whitespace-nowrap">Cash</span>
             </button>
             
             <button
               onClick={() => actions.openPaymentModal('card')}
               disabled={isEmpty}
-              className={`flex flex-col items-center justify-center gap-1 px-4 py-4 rounded-xl font-semibold transition-all btn-press ${
+              className={`flex flex-row lg:flex-col items-center justify-center gap-1.5 lg:gap-1 px-2 py-3 rounded-xl font-semibold transition-all btn-press ${
                 isEmpty
                   ? 'bg-latte/20 text-latte cursor-not-allowed'
                   : 'bg-espresso text-white hover:bg-espresso/90 shadow-lg shadow-espresso/30'
               }`}
             >
-              <CreditCard className="w-6 h-6" />
-              <span>Card</span>
+              <CreditCard className="w-5 h-5 lg:w-6 lg:h-6 shrink-0" />
+              <span className="text-sm lg:text-base whitespace-nowrap">Card</span>
             </button>
             
             <button
               onClick={() => actions.openPaymentModal('ewallet')}
               disabled={isEmpty}
-              className={`flex flex-col items-center justify-center gap-1 px-4 py-4 rounded-xl font-semibold transition-all btn-press ${
+              className={`flex flex-row lg:flex-col items-center justify-center gap-1.5 lg:gap-1 px-2 py-3 rounded-xl font-semibold transition-all btn-press ${
                 isEmpty
                   ? 'bg-latte/20 text-latte cursor-not-allowed'
                   : 'bg-medium-roast text-white hover:bg-medium-roast/90 shadow-lg shadow-medium-roast/30'
               }`}
             >
-              <Smartphone className="w-6 h-6" />
-              <span>E-Wallet</span>
+              <Smartphone className="w-5 h-5 lg:w-6 lg:h-6 shrink-0" />
+              <span className="text-sm lg:text-base whitespace-nowrap">E-Wallet</span>
             </button>
           </div>
         )}
@@ -624,96 +649,184 @@ function OrderTargetSelector({
   );
 }
 
-function OrderItemRow({ item, onUpdate, onRemove }) {
+// A single cart line, kept to one row so the payment buttons stay reachable
+// without scrolling on phones and tablets. The stepper doubles as the delete
+// control (minus at quantity 1 becomes a bin), which removes the redundant
+// second row and the separate X button the old layout needed.
+function OrderItemRow({ item, onUpdate, onRemove, canEditPrice }) {
+  const [editingPrice, setEditingPrice] = useState(false);
+  const [priceDraft, setPriceDraft] = useState('');
   const modifierTotal = (item.modifiers || []).reduce((sum, m) => sum + m.price, 0);
   const itemTotal = (item.price + modifierTotal) * item.quantity;
-  
+  // Remember what the menu said the first time a price is overridden so the
+  // change stays visible and reversible for the rest of the order's life.
+  const menuPrice = item.originalPrice ?? item.price;
+  const isOverridden = item.originalPrice != null && item.originalPrice !== item.price;
+
+  const openPriceEditor = () => {
+    if (!canEditPrice) return;
+    setPriceDraft((item.price / 100).toFixed(2));
+    setEditingPrice(true);
+  };
+
+  const commitPrice = () => {
+    const parsed = Number.parseFloat(priceDraft);
+    setEditingPrice(false);
+    // Ignore anything that is not a usable amount and keep the current price.
+    // Zero is rejected too: a free line has to go through a discount or a
+    // void so it stays on the record, rather than being priced away here.
+    if (!Number.isFinite(parsed) || parsed <= 0) return;
+    const cents = Math.round(parsed * 100);
+    if (cents <= 0 || cents === item.price) return;
+    onUpdate({
+      price: cents,
+      // Restoring the menu price clears the override marker entirely.
+      originalPrice: cents === menuPrice ? null : menuPrice,
+    });
+  };
+
+  const resetPrice = () => {
+    setEditingPrice(false);
+    onUpdate({ price: menuPrice, originalPrice: null });
+  };
+
+  // Flag a bad draft while it is being typed so a rejected value explains
+  // itself instead of silently snapping back to the old price.
+  const draftNumber = Number.parseFloat(priceDraft);
+  const draftInvalid =
+    priceDraft.trim() !== '' && (!Number.isFinite(draftNumber) || draftNumber <= 0);
+
   return (
     <motion.div
       layout
       initial={{ opacity: 0, x: -20 }}
       animate={{ opacity: 1, x: 0 }}
       exit={{ opacity: 0, x: 20 }}
-      className="bg-cream rounded-xl p-3 border border-latte/20"
+      className="bg-cream rounded-xl px-2.5 py-2 border border-latte/20"
     >
-      <div className="flex items-start justify-between gap-3">
+      <div className="flex items-center gap-2">
+        {/* Compact stepper */}
+        <div className="flex items-center gap-0.5 shrink-0">
+          <button
+            onClick={() => {
+              if (item.quantity > 1) onUpdate({ quantity: item.quantity - 1 });
+              else onRemove();
+            }}
+            aria-label={item.quantity > 1 ? `Reduce ${item.name}` : `Remove ${item.name}`}
+            className="w-7 h-7 flex items-center justify-center rounded-lg bg-white border border-latte/30 hover:bg-latte/10 transition-colors"
+          >
+            {item.quantity > 1 ? (
+              <Minus className="w-3.5 h-3.5 text-medium-roast" />
+            ) : (
+              <Trash2 className="w-3.5 h-3.5 text-error" />
+            )}
+          </button>
+          <span className="w-6 text-center text-sm font-semibold text-dark-roast tabular-nums">
+            {item.quantity}
+          </span>
+          <button
+            onClick={() => onUpdate({ quantity: item.quantity + 1 })}
+            aria-label={`Add another ${item.name}`}
+            className="w-7 h-7 flex items-center justify-center rounded-lg bg-white border border-latte/30 hover:bg-latte/10 transition-colors"
+          >
+            <Plus className="w-3.5 h-3.5 text-medium-roast" />
+          </button>
+        </div>
+
+        {/* Name and, only when they exist, modifiers / notes */}
         <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 mb-1">
-            <span className="bg-espresso text-white text-xs px-2 py-0.5 rounded-full font-medium">
-              {item.quantity}x
-            </span>
-            <h4 className="font-semibold text-dark-roast truncate">{item.name}</h4>
-          </div>
-          
-          {/* Modifiers */}
-          {item.modifiers && item.modifiers.length > 0 && (
-            <div className="flex flex-wrap gap-1 mb-1">
-              {item.modifiers.map((mod, i) => (
-                <span
-                  key={i}
-                  className="text-xs bg-latte/20 text-medium-roast px-2 py-0.5 rounded-full"
-                >
-                  {mod.name}
-                  {mod.price > 0 && ` (+${formatPrice(mod.price)})`}
+          <h4 className="font-semibold text-sm text-dark-roast truncate leading-tight">
+            {item.name}
+          </h4>
+          {(item.modifiers?.length > 0 || item.specialInstructions || isOverridden) && (
+            <p className="text-xs text-medium-roast truncate leading-tight mt-0.5">
+              {isOverridden && (
+                <span className="text-accent font-medium">
+                  {formatPrice(item.price)} each ·{' '}
                 </span>
-              ))}
-            </div>
-          )}
-          
-          {/* Special instructions */}
-          {item.specialInstructions && (
-            <p className="text-xs text-accent italic">
-              Note: {item.specialInstructions}
+              )}
+              {(item.modifiers || []).map(mod => mod.name).join(', ')}
+              {item.modifiers?.length > 0 && item.specialInstructions ? ' · ' : ''}
+              {item.specialInstructions && (
+                <span className="italic text-accent">{item.specialInstructions}</span>
+              )}
             </p>
           )}
         </div>
-        
-        <div className="text-right">
-          <span className="font-mono font-semibold text-espresso">
+
+        {/* Line total doubles as the price-edit affordance where permitted */}
+        {canEditPrice ? (
+          <button
+            onClick={openPriceEditor}
+            aria-label={`Change price of ${item.name}`}
+            className="shrink-0 flex items-center gap-1 px-1.5 py-1 -mr-1 rounded-lg hover:bg-latte/20 transition-colors group"
+          >
+            <span className={`font-mono font-semibold text-sm ${isOverridden ? 'text-accent' : 'text-espresso'}`}>
+              {formatPrice(itemTotal)}
+            </span>
+            <Pencil className="w-3 h-3 text-latte group-hover:text-accent transition-colors" />
+          </button>
+        ) : (
+          <span className="shrink-0 font-mono font-semibold text-sm text-espresso">
             {formatPrice(itemTotal)}
           </span>
-        </div>
+        )}
       </div>
-      
-      {/* Quantity controls */}
-      <div className="flex items-center justify-between mt-3 pt-2 border-t border-latte/10">
-        <div className="flex items-center gap-1">
-          <button
-            onClick={() => {
-              if (item.quantity > 1) {
-                onUpdate({ quantity: item.quantity - 1 });
-              } else {
-                onRemove();
-              }
-            }}
-            className="p-1.5 rounded-lg bg-white border border-latte/30 hover:bg-latte/10 transition-colors"
+
+      {/* Inline price editor — opens in place so nothing jumps around */}
+      <AnimatePresence>
+        {editingPrice && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            className="overflow-hidden"
           >
-            {item.quantity > 1 ? (
-              <Minus className="w-4 h-4 text-medium-roast" />
-            ) : (
-              <Trash2 className="w-4 h-4 text-error" />
-            )}
-          </button>
-          
-          <span className="w-8 text-center font-medium text-dark-roast">
-            {item.quantity}
-          </span>
-          
-          <button
-            onClick={() => onUpdate({ quantity: item.quantity + 1 })}
-            className="p-1.5 rounded-lg bg-white border border-latte/30 hover:bg-latte/10 transition-colors"
-          >
-            <Plus className="w-4 h-4 text-medium-roast" />
-          </button>
-        </div>
-        
-        <button
-          onClick={onRemove}
-          className="p-1.5 rounded-lg text-error hover:bg-error/10 transition-colors"
-        >
-          <X className="w-4 h-4" />
-        </button>
-      </div>
+            <div className="flex items-center gap-2 mt-2 pt-2 border-t border-latte/20">
+              <span className="text-xs text-medium-roast shrink-0">Unit price</span>
+              <input
+                type="number"
+                inputMode="decimal"
+                step="0.01"
+                min="0.01"
+                autoFocus
+                value={priceDraft}
+                onChange={(e) => setPriceDraft(e.target.value)}
+                onFocus={(e) => e.target.select()}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') commitPrice();
+                  if (e.key === 'Escape') setEditingPrice(false);
+                }}
+                onBlur={commitPrice}
+                className={`w-24 px-2 py-1 bg-white border rounded-lg text-sm font-mono focus:outline-none ${
+                  draftInvalid
+                    ? 'border-error focus:border-error'
+                    : 'border-accent/40 focus:border-accent'
+                }`}
+              />
+              {draftInvalid && (
+                <span className="text-xs text-error shrink-0">Must be above 0</span>
+              )}
+              {isOverridden && !draftInvalid && (
+                <button
+                  // Mouse down fires before the input's blur, so the reset is
+                  // not swallowed by commitPrice closing the editor first.
+                  onMouseDown={(e) => { e.preventDefault(); resetPrice(); }}
+                  className="text-xs text-medium-roast hover:text-accent underline shrink-0"
+                >
+                  Reset to {formatPrice(menuPrice)}
+                </button>
+              )}
+              <button
+                onMouseDown={(e) => { e.preventDefault(); commitPrice(); }}
+                className="ml-auto px-3 py-1 bg-espresso text-white rounded-lg text-xs font-medium hover:bg-espresso/90 shrink-0"
+              >
+                Done
+              </button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </motion.div>
   );
 }
