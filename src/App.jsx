@@ -7,6 +7,7 @@ import OrderPanel from './components/OrderPanel';
 import ModifierModal from './components/ModifierModal';
 import PaymentModal from './components/PaymentModal';
 import TableView from './components/TableView';
+import CurrentOrders from './components/CurrentOrders';
 import Reports from './components/Reports';
 import Settings from './components/Settings';
 import Login from './components/Login';
@@ -66,6 +67,7 @@ function MainContent() {
       <main className="flex-1 flex overflow-hidden bg-cream">
         {view === 'pos' && <POSView />}
         {view === 'tables' && <TableView />}
+        {view === 'orders' && currentUser?.role === 'server' && <CurrentOrders />}
         {view === 'reports' && canManage && <Reports />}
         {view === 'settings' && <Settings />}
       </main>

@@ -314,6 +314,209 @@ export const cloudAuth = {
     if (error) return { data: null, error };
     return { data, error: null };
   },
+
+  // Shared store configuration. Operational switches (such as whether a
+  // server can see everybody's open orders) must live in Supabase rather than
+  // only in one device's localStorage.
+  async getStoreSettings(storeId) {
+    if (!isCloudEnabled) return { data: null, error: null };
+    const { data, error } = await supabase
+      .from('stores')
+      .select('settings, currency, tax_rate')
+      .eq('id', storeId)
+      .single();
+    if (error) return { data: null, error };
+    return {
+      data: {
+        ...data?.settings,
+        currency: data?.settings?.currency || data?.currency || 'RM',
+        taxRate: Number(data?.settings?.taxRate ?? data?.tax_rate ?? 0.06),
+      },
+      error: null,
+    };
+  },
+
+  async updateStoreSettings(storeId, settings) {
+    if (!isCloudEnabled) return { data: settings, error: null };
+    const { data, error } = await supabase
+      .from('stores')
+      .update({
+        settings,
+        currency: settings?.currency || 'RM',
+        tax_rate: Number(settings?.taxRate ?? 0.06),
+      })
+      .eq('id', storeId)
+      .select('settings')
+      .single();
+    return error
+      ? { data: null, error }
+      : { data: data?.settings || settings, error: null };
+  },
+
+  // Narrow manager-safe RPC: changes only the server-order visibility key,
+  // without granting managers write access to the rest of the store row.
+  async updateServerOrderVisibility(storeId, enabled) {
+    if (!isCloudEnabled) return { data: { serverCanViewAllOrders: enabled }, error: null };
+    const { data, error } = await supabase.rpc('set_server_order_visibility', {
+      p_store_id: storeId,
+      p_enabled: enabled !== false,
+    });
+    return error ? { data: null, error } : { data, error: null };
+  },
+
+  subscribeStoreSettings(storeId, onChange) {
+    if (!isCloudEnabled || !storeId) return () => {};
+    const channel = supabase
+      .channel(`store-settings-${storeId}-${Math.random().toString(36).slice(2)}`)
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'stores', filter: `id=eq.${storeId}` },
+        (payload) => onChange?.(payload.new?.settings || {})
+      )
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  },
+};
+
+// Convert between the app's cents-based order shape and the Supabase row.
+// Draft order ids are friendly strings; Supabase assigns the durable UUID on
+// first placement and that UUID is then used for every edit/payment.
+const isUuid = (value) =>
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || ''));
+
+function fromOrderRow(row) {
+  const asMillis = (value) => value ? new Date(value).getTime() : null;
+  return {
+    id: row.id,
+    cloudId: row.id,
+    status: row.status,
+    tableId: row.table_ref || 'COUNTER',
+    items: Array.isArray(row.items) ? row.items : [],
+    subtotal: row.subtotal_cents || 0,
+    tax: row.tax_cents || 0,
+    discount: row.discount || null,
+    discountAmount: row.discount_cents || 0,
+    total: row.total_cents || 0,
+    notes: row.notes || '',
+    paymentMethod: row.payment_method || null,
+    amountPaid: row.amount_paid_cents,
+    change: row.change_cents,
+    serverId: row.created_by || null,
+    serverName: row.server_name || '',
+    createdAt: asMillis(row.created_at),
+    placedAt: asMillis(row.created_at),
+    heldAt: asMillis(row.held_at),
+    paidAt: asMillis(row.paid_at),
+    voidedAt: asMillis(row.voided_at),
+  };
+}
+
+function toOrderRow(order, storeId, userId, includeCreator = false) {
+  return {
+    store_id: storeId,
+    status: order.status === 'held' ? 'held' : 'open',
+    table_ref: order.tableId || 'COUNTER',
+    items: order.items || [],
+    subtotal_cents: order.subtotal || 0,
+    tax_cents: order.tax || 0,
+    discount: order.discount || null,
+    discount_cents: order.discountAmount || 0,
+    total_cents: order.total || 0,
+    notes: order.notes || null,
+    server_name: order.serverName || '',
+    ...(includeCreator ? { created_by: userId } : {}),
+  };
+}
+
+export const cloudOrders = {
+  async listOpen(storeId) {
+    if (!isCloudEnabled || !storeId) return { data: [], error: null };
+    const { data, error } = await supabase
+      .from('orders')
+      .select('*')
+      .eq('store_id', storeId)
+      .in('status', ['open', 'held'])
+      .order('created_at', { ascending: true });
+    return error
+      ? { data: [], error }
+      : { data: (data || []).map(fromOrderRow), error: null };
+  },
+
+  async saveOpen({ storeId, userId, order }) {
+    if (!isCloudEnabled) return { data: order, error: null };
+    const durableId = order.cloudId || (isUuid(order.id) ? order.id : null);
+    let result;
+    if (durableId) {
+      result = await supabase
+        .from('orders')
+        .update(toOrderRow(order, storeId, userId, false))
+        .eq('id', durableId)
+        .eq('store_id', storeId)
+        .select('*')
+        .single();
+    } else {
+      result = await supabase
+        .from('orders')
+        .insert(toOrderRow(order, storeId, userId, true))
+        .select('*')
+        .single();
+    }
+    return result.error
+      ? { data: null, error: result.error }
+      : { data: fromOrderRow(result.data), error: null };
+  },
+
+  async void({ storeId, order }) {
+    if (!isCloudEnabled) return { data: order, error: null };
+    const id = order.cloudId || order.id;
+    const { data, error } = await supabase
+      .from('orders')
+      .update({ status: 'voided', voided_at: new Date().toISOString() })
+      .eq('id', id)
+      .eq('store_id', storeId)
+      .select('*')
+      .single();
+    return error ? { data: null, error } : { data: fromOrderRow(data), error: null };
+  },
+
+  async complete({ storeId, order, method, amountPaid, change }) {
+    if (!isCloudEnabled) return { data: order, error: null };
+    const id = order.cloudId || order.id;
+    const { data, error } = await supabase
+      .from('orders')
+      .update({
+        status: 'paid',
+        items: order.items || [],
+        subtotal_cents: order.subtotal || 0,
+        tax_cents: order.tax || 0,
+        discount: order.discount || null,
+        discount_cents: order.discountAmount || 0,
+        total_cents: order.total || 0,
+        notes: order.notes || null,
+        payment_method: method,
+        amount_paid_cents: amountPaid,
+        change_cents: change,
+        paid_at: new Date().toISOString(),
+      })
+      .eq('id', id)
+      .eq('store_id', storeId)
+      .select('*')
+      .single();
+    return error ? { data: null, error } : { data: fromOrderRow(data), error: null };
+  },
+
+  subscribe(storeId, onChange) {
+    if (!isCloudEnabled || !storeId) return () => {};
+    const channel = supabase
+      .channel(`open-orders-${storeId}-${Math.random().toString(36).slice(2)}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'orders', filter: `store_id=eq.${storeId}` },
+        () => onChange?.()
+      )
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  },
 };
 
 // POST to the serverless staff-provisioning route. On Vercel `/api/*` is

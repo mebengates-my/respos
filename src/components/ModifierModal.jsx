@@ -36,7 +36,7 @@ export default function ModifierModal() {
   const handleAddToOrder = () => {
     actions.addItem(selectedMenuItem, selectedModifiers, quantity, specialInstructions);
     actions.closeModifierModal();
-    actions.addToast(`Added ${quantity}x ${selectedMenuItem.name}`, 'success');
+    // The cart itself gives immediate feedback; avoid a popup on every item.
     // Reset state
     setSelectedModifiers([]);
     setQuantity(1);

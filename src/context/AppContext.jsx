@@ -17,8 +17,12 @@ import {
   saveToStorage,
   loadFromStorage
 } from '../utils/helpers';
-import { cloudAuth, buildAppUser, isCloudEnabled } from '../services/cloud';
-import { loadStoreSettings, STORE_SETTINGS_STORAGE_KEY } from '../data/storeSettings';
+import { cloudAuth, cloudOrders, buildAppUser, isCloudEnabled } from '../services/cloud';
+import {
+  loadStoreSettings,
+  saveStoreSettings,
+  STORE_SETTINGS_STORAGE_KEY,
+} from '../data/storeSettings';
 
 const AppContext = createContext(null);
 
@@ -30,6 +34,7 @@ const ACTIONS = {
   LOGOUT: 'LOGOUT',
   SET_LANGUAGE: 'SET_LANGUAGE',
   SET_TAX_SETTINGS: 'SET_TAX_SETTINGS',
+  SET_SERVER_ORDER_VISIBILITY: 'SET_SERVER_ORDER_VISIBILITY',
   
   // Views
   SET_VIEW: 'SET_VIEW',
@@ -75,6 +80,10 @@ const ACTIONS = {
   UPDATE_ORDER_NOTES: 'UPDATE_ORDER_NOTES',
   HOLD_ORDER: 'HOLD_ORDER',
   RECALL_ORDER: 'RECALL_ORDER',
+  SET_OPEN_ORDERS: 'SET_OPEN_ORDERS',
+  SUBMIT_ORDER: 'SUBMIT_ORDER',
+  EDIT_OPEN_ORDER: 'EDIT_OPEN_ORDER',
+  CANCEL_OPEN_ORDER: 'CANCEL_OPEN_ORDER',
   PROCESS_PAYMENT: 'PROCESS_PAYMENT',
   VOID_ORDER: 'VOID_ORDER',
   
@@ -148,9 +157,13 @@ const initialState = {
   // and no tax line is shown anywhere.
   taxRate: initialStoreSettings.taxRate ?? TAX_RATE,
   taxEnabled: initialStoreSettings.taxEnabled !== false,
+  // Admin/Manager setting. It defaults to showing every open order; when off,
+  // servers only receive orders created by their own account.
+  serverCanViewAllOrders: initialStoreSettings.serverCanViewAllOrders !== false,
   
-  // Tables
-  selectedTable: null,
+  // Tables. The counter represents a walk-in customer and is selected by
+  // default, so a server can start a walk-in order immediately.
+  selectedTable: initialTables.find(table => table.isCounter) || null,
   tables: initialTables,
   
   // Users
@@ -162,6 +175,9 @@ const initialState = {
   
   // Orders
   currentOrder: null,
+  // Submitted, unpaid orders. Unlike currentOrder (the draft on this device),
+  // these are visible on the management board and to permitted servers.
+  openOrders: [],
   heldOrders: [],
   orderHistory: [],
   
@@ -196,6 +212,7 @@ function getPersistedState(savedState) {
   return {
     tables: savedState?.tables || initialTables,
     orderHistory: savedState?.orderHistory || [],
+    openOrders: savedState?.openOrders || [],
     heldOrders: savedState?.heldOrders || [],
     categories,
     menuItems,
@@ -228,10 +245,21 @@ function appReducer(state, action) {
         // Admins and managers land directly in the management panel; its default tab
         // is Dashboard. Servers go straight to the POS.
         view: action.payload.role === 'admin' || action.payload.role === 'manager' ? 'admin' : 'pos',
+        currentOrder: null,
+        selectedTable: state.tables.find(table => table.isCounter) || null,
       };
     
     case ACTIONS.LOGOUT:
-      return { ...state, currentUser: null, isLoggedIn: false, view: 'pos', currentOrder: null, cloudSession: null };
+      return {
+        ...state,
+        currentUser: null,
+        isLoggedIn: false,
+        view: 'pos',
+        currentOrder: null,
+        openOrders: state.currentUser?.cloud ? [] : state.openOrders,
+        selectedTable: state.tables.find(table => table.isCounter) || null,
+        cloudSession: null,
+      };
 
     case ACTIONS.CLOUD_LOGIN:
       return {
@@ -243,10 +271,30 @@ function appReducer(state, action) {
         view: action.payload.user.role === 'admin' || action.payload.user.role === 'manager'
           ? 'admin'
           : 'pos',
+        currentOrder: null,
+        // Never display orders cached from a different local/cloud store while
+        // the tenant-scoped Supabase query is loading.
+        openOrders: [],
+        selectedTable: state.tables.find(table => table.isCounter) || null,
       };
     
     case ACTIONS.SET_LANGUAGE:
       return { ...state, language: action.payload };
+
+    case ACTIONS.SET_SERVER_ORDER_VISIBILITY: {
+      const canViewAll = action.payload !== false;
+      return {
+        ...state,
+        serverCanViewAllOrders: canViewAll,
+        // If access is switched off while a server is signed in, immediately
+        // discard other servers' orders already held in client memory.
+        openOrders: !canViewAll && state.currentUser?.role === 'server'
+          ? state.openOrders.filter(order =>
+              order.serverId === state.currentUser.id || order.createdBy === state.currentUser.id
+            )
+          : state.openOrders,
+      };
+    }
 
     // Keep order math in step with Admin → Settings → Tax & Currency.
     case ACTIONS.SET_TAX_SETTINGS: {
@@ -344,8 +392,18 @@ function appReducer(state, action) {
     }
     
     // Tables
-    case ACTIONS.SELECT_TABLE:
-      return { ...state, selectedTable: action.payload };
+    case ACTIONS.SELECT_TABLE: {
+      const table = action.payload || state.tables.find(item => item.isCounter) || null;
+      return {
+        ...state,
+        selectedTable: table,
+        // The table is chosen before items are submitted. If a draft already
+        // has items, keep its table reference in step with the selector.
+        currentOrder: state.currentOrder
+          ? { ...state.currentOrder, tableId: table?.id || 'COUNTER' }
+          : null,
+      };
+    }
     
     case ACTIONS.ADD_TABLE: {
       const maxNumber = Math.max(...state.tables.filter(t => !t.isCounter).map(t => t.number), 0);
@@ -546,6 +604,7 @@ function appReducer(state, action) {
             createdAt: Date.now(),
             tableId: state.selectedTable?.id || 'COUNTER',
             serverId: state.currentUser?.id,
+            serverName: state.currentUser?.name,
           }),
           items: newItems,
           subtotal,
@@ -590,7 +649,7 @@ function appReducer(state, action) {
       
       return {
         ...state,
-        currentOrder: newItems.length > 0
+        currentOrder: newItems.length > 0 || state.currentOrder.isEditing
           ? { ...state.currentOrder, items: newItems, subtotal, tax, discountAmount, total }
           : null,
       };
@@ -645,6 +704,85 @@ function appReducer(state, action) {
           ? { ...state.currentOrder, notes: action.payload }
           : null,
       };
+
+    case ACTIONS.SET_OPEN_ORDERS: {
+      const openOrders = action.payload || [];
+      const openByTable = new Map(
+        openOrders
+          .filter(order => order.tableId && order.tableId !== 'COUNTER')
+          .map(order => [order.tableId, order.id])
+      );
+      return {
+        ...state,
+        openOrders,
+        // Cloud/local order updates also keep the floor view current.
+        tables: state.tables.map(table => {
+          if (table.isCounter) return table;
+          const orderId = openByTable.get(table.id);
+          if (orderId) return { ...table, status: 'occupied', currentOrderId: orderId };
+          // Only automatically clear tables that were tied to an order. Manual
+          // reservations/cleaning states are never overwritten.
+          if (table.status === 'occupied' && table.currentOrderId) {
+            return { ...table, status: 'available', currentOrderId: null };
+          }
+          return table;
+        }),
+      };
+    }
+
+    case ACTIONS.SUBMIT_ORDER: {
+      const submitted = { ...action.payload, status: 'open', isEditing: false };
+      const exists = state.openOrders.some(order => order.id === submitted.id);
+      const openOrders = exists
+        ? state.openOrders.map(order => order.id === submitted.id ? submitted : order)
+        : [...state.openOrders, submitted];
+      return {
+        ...state,
+        openOrders,
+        currentOrder: null,
+        selectedTable: state.tables.find(table => table.isCounter) || null,
+        tables: state.tables.map(table =>
+          table.id === submitted.tableId && !table.isCounter
+            ? { ...table, status: 'occupied', currentOrderId: submitted.id }
+            : table
+        ),
+      };
+    }
+
+    case ACTIONS.EDIT_OPEN_ORDER: {
+      const order = action.payload;
+      return {
+        ...state,
+        currentOrder: { ...order, status: 'open', isEditing: true },
+        selectedTable: state.tables.find(table => table.id === order.tableId)
+          || state.tables.find(table => table.isCounter)
+          || null,
+        view: 'pos',
+      };
+    }
+
+    case ACTIONS.CANCEL_OPEN_ORDER: {
+      const cancelled = action.payload;
+      const remaining = state.openOrders.filter(order => order.id !== cancelled.id);
+      const anotherAtTable = remaining.some(order => order.tableId === cancelled.tableId);
+      return {
+        ...state,
+        openOrders: remaining,
+        currentOrder: state.currentOrder?.id === cancelled.id ? null : state.currentOrder,
+        selectedTable: state.currentOrder?.id === cancelled.id
+          ? state.tables.find(table => table.isCounter) || null
+          : state.selectedTable,
+        orderHistory: [
+          { ...cancelled, status: 'voided', voidedAt: cancelled.voidedAt || Date.now() },
+          ...state.orderHistory,
+        ],
+        tables: state.tables.map(table =>
+          table.id === cancelled.tableId && !anotherAtTable
+            ? { ...table, status: 'available', currentOrderId: null }
+            : table
+        ),
+      };
+    }
     
     case ACTIONS.HOLD_ORDER: {
       const heldOrder = {
@@ -656,7 +794,7 @@ function appReducer(state, action) {
         ...state,
         heldOrders: [...state.heldOrders, heldOrder],
         currentOrder: null,
-        selectedTable: null,
+        selectedTable: state.tables.find(table => table.isCounter) || null,
       };
     }
     
@@ -689,7 +827,7 @@ function appReducer(state, action) {
       };
       
       const newTables = state.tables.map(table =>
-        table.id === state.selectedTable?.id
+        table.id === state.currentOrder?.tableId && !table.isCounter
           ? { ...table, status: 'cleaning', currentOrderId: null }
           : table
       );
@@ -697,7 +835,8 @@ function appReducer(state, action) {
       return {
         ...state,
         currentOrder: null,
-        selectedTable: null,
+        openOrders: state.openOrders.filter(order => order.id !== completedOrder.id),
+        selectedTable: state.tables.find(table => table.isCounter) || null,
         orderHistory: [completedOrder, ...state.orderHistory],
         tables: newTables,
         isPaymentModalOpen: false,
@@ -713,7 +852,7 @@ function appReducer(state, action) {
       };
       
       const newTables = state.tables.map(table =>
-        table.id === state.selectedTable?.id
+        table.id === state.currentOrder?.tableId
           ? { ...table, status: 'available', currentOrderId: null }
           : table
       );
@@ -721,7 +860,8 @@ function appReducer(state, action) {
       return {
         ...state,
         currentOrder: null,
-        selectedTable: null,
+        openOrders: state.openOrders.filter(order => order.id !== voidedOrder.id),
+        selectedTable: state.tables.find(table => table.isCounter) || null,
         orderHistory: [voidedOrder, ...state.orderHistory],
         tables: newTables,
       };
@@ -769,7 +909,7 @@ function appReducer(state, action) {
       // Keep the signed-in user in step with the (possibly newer) users list coming
       // from storage: pick up renames/role changes, and sign out if the user was
       // deleted or deactivated on another tab.
-      if (next.currentUser && Array.isArray(next.users)) {
+      if (next.currentUser && !next.currentUser.cloud && Array.isArray(next.users)) {
         const fresh = next.users.find(u => u.id === next.currentUser.id);
         if (!fresh || fresh.active === false) {
           return { ...next, currentUser: null, isLoggedIn: false, view: 'pos', currentOrder: null };
@@ -834,6 +974,10 @@ export function AppProvider({ children }) {
         dispatch({
           type: ACTIONS.SET_TAX_SETTINGS,
           payload: { taxRate: fresh.taxRate, taxEnabled: fresh.taxEnabled },
+        });
+        dispatch({
+          type: ACTIONS.SET_SERVER_ORDER_VISIBILITY,
+          payload: fresh.serverCanViewAllOrders,
         });
         return;
       }
@@ -904,6 +1048,66 @@ export function AppProvider({ children }) {
     }
   }
 
+  // Cloud stores share submitted orders in real time. A draft remains private
+  // to the server's screen until Place Order is pressed.
+  useEffect(() => {
+    const storeId = state.currentUser?.storeId || state.cloudSession?.storeId;
+    if (!isCloudEnabled || !state.currentUser?.cloud || !storeId) return;
+    let cancelled = false;
+
+    const refresh = async () => {
+      const { data, error } = await cloudOrders.listOpen(storeId);
+      if (!cancelled && !error) {
+        dispatch({ type: ACTIONS.SET_OPEN_ORDERS, payload: data || [] });
+      }
+    };
+
+    refresh();
+    const unsubscribe = cloudOrders.subscribe(storeId, refresh);
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, [state.currentUser?.id, state.currentUser?.cloud, state.currentUser?.storeId, state.cloudSession?.storeId]);
+
+  // Load and watch shared store settings so the server-order visibility switch
+  // takes effect on every signed-in device, not just the manager's browser.
+  useEffect(() => {
+    const storeId = state.currentUser?.storeId || state.cloudSession?.storeId;
+    if (!isCloudEnabled || !state.currentUser?.cloud || !storeId) return;
+    let cancelled = false;
+
+    const applySettings = (incoming) => {
+      if (cancelled || !incoming || typeof incoming !== 'object') return;
+      const merged = { ...loadStoreSettings(), ...incoming };
+      saveStoreSettings(merged);
+      dispatch({
+        type: ACTIONS.SET_TAX_SETTINGS,
+        payload: { taxRate: merged.taxRate, taxEnabled: merged.taxEnabled },
+      });
+      dispatch({
+        type: ACTIONS.SET_SERVER_ORDER_VISIBILITY,
+        payload: merged.serverCanViewAllOrders,
+      });
+      // The RLS result set changes with this switch. Refetch now so turning it
+      // on reveals allowed orders and turning it off purges disallowed ones.
+      cloudOrders.listOpen(storeId).then(({ data, error }) => {
+        if (!cancelled && !error) {
+          dispatch({ type: ACTIONS.SET_OPEN_ORDERS, payload: data || [] });
+        }
+      });
+    };
+
+    cloudAuth.getStoreSettings(storeId).then(({ data, error }) => {
+      if (!error) applySettings(data);
+    });
+    const unsubscribe = cloudAuth.subscribeStoreSettings(storeId, applySettings);
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, [state.currentUser?.id, state.currentUser?.cloud, state.currentUser?.storeId, state.cloudSession?.storeId]);
+
   // Report the actual browser connection state. All POS actions still work offline
   // because the application shell and operational data are stored on the device.
   useEffect(() => {
@@ -927,6 +1131,7 @@ export function AppProvider({ children }) {
         menuDataVersion: MENU_DATA_VERSION,
         tables: state.tables,
         orderHistory: state.orderHistory,
+        openOrders: state.openOrders,
         heldOrders: state.heldOrders,
         categories: state.categories,
         menuItems: state.menuItems,
@@ -943,6 +1148,7 @@ export function AppProvider({ children }) {
   }, [
     state.tables,
     state.orderHistory,
+    state.openOrders,
     state.heldOrders,
     state.categories,
     state.menuItems,
@@ -997,6 +1203,10 @@ export function AppProvider({ children }) {
     // the new tax rate / on-off switch.
     setTaxSettings: useCallback(({ taxRate, taxEnabled }) => {
       dispatch({ type: ACTIONS.SET_TAX_SETTINGS, payload: { taxRate, taxEnabled } });
+    }, []),
+
+    setServerOrderVisibility: useCallback((canViewAll) => {
+      dispatch({ type: ACTIONS.SET_SERVER_ORDER_VISIBILITY, payload: canViewAll });
     }, []),
 
     setLanguage: useCallback((lang) => {
@@ -1154,10 +1364,76 @@ export function AppProvider({ children }) {
     recallOrder: useCallback((order) => {
       dispatch({ type: ACTIONS.RECALL_ORDER, payload: order });
     }, []),
+
+    placeOrder: useCallback(async () => {
+      const draft = state.currentOrder;
+      if (!draft?.items?.length) {
+        return { ok: false, error: { message: 'Add at least one item before placing the order.' } };
+      }
+
+      const now = Date.now();
+      let submitted = {
+        ...draft,
+        status: 'open',
+        serverId: draft.serverId || state.currentUser?.id,
+        serverName: draft.serverName || state.currentUser?.name,
+        placedAt: draft.placedAt || now,
+        updatedAt: now,
+      };
+      const storeId = state.currentUser?.storeId || state.cloudSession?.storeId;
+      if (isCloudEnabled && state.currentUser?.cloud && storeId) {
+        const { data, error } = await cloudOrders.saveOpen({
+          storeId,
+          userId: state.currentUser.id,
+          order: submitted,
+        });
+        if (error) return { ok: false, error };
+        // Supabase supplies the durable UUID. Preserve the attribution while
+        // swapping the friendly draft id for the durable database id.
+        submitted = {
+          ...data,
+          serverName: draft.serverName || state.currentUser?.name,
+          isEditing: false,
+        };
+      }
+
+      dispatch({ type: ACTIONS.SUBMIT_ORDER, payload: submitted });
+      return { ok: true, order: submitted };
+    }, [state.currentOrder, state.currentUser, state.cloudSession]),
+
+    editOpenOrder: useCallback((order) => {
+      dispatch({ type: ACTIONS.EDIT_OPEN_ORDER, payload: order });
+    }, []),
+
+    cancelOpenOrder: useCallback(async (order) => {
+      if (!order) return { ok: false, error: { message: 'Order not found' } };
+      const storeId = state.currentUser?.storeId || state.cloudSession?.storeId;
+      let cancelled = { ...order, status: 'voided', voidedAt: Date.now() };
+      if (isCloudEnabled && state.currentUser?.cloud && storeId) {
+        const { data, error } = await cloudOrders.void({ storeId, order });
+        if (error) return { ok: false, error };
+        cancelled = { ...cancelled, ...data, serverName: order.serverName };
+      }
+      dispatch({ type: ACTIONS.CANCEL_OPEN_ORDER, payload: cancelled });
+      return { ok: true };
+    }, [state.currentUser, state.cloudSession]),
     
     processPayment: useCallback((method, amountPaid, change) => {
+      const order = state.currentOrder;
       dispatch({ type: ACTIONS.PROCESS_PAYMENT, payload: { method, amountPaid, change } });
-    }, []),
+
+      const storeId = state.currentUser?.storeId || state.cloudSession?.storeId;
+      if (order?.cloudId && isCloudEnabled && state.currentUser?.cloud && storeId) {
+        cloudOrders.complete({ storeId, order, method, amountPaid, change }).then(({ error }) => {
+          if (error) {
+            dispatch({
+              type: ACTIONS.ADD_TOAST,
+              payload: { message: `Payment saved locally, but cloud sync failed: ${error.message}`, type: 'error' },
+            });
+          }
+        });
+      }
+    }, [state.currentOrder, state.currentUser, state.cloudSession]),
     
     voidOrder: useCallback(() => {
       if (state.currentOrder) {

@@ -8,10 +8,10 @@ import {
   Wifi,
   WifiOff,
   User,
-  Settings,
   BarChart3,
   LayoutGrid,
   Users,
+  ClipboardList,
   Shield,
   Globe,
   LogOut
@@ -72,7 +72,15 @@ export default function Header() {
           active={view === 'tables'}
           onClick={() => actions.setView('tables')}
         />
-        {/* Servers only take orders — reports are for admins and managers */}
+        {isServer && (
+          <NavButton
+            icon={<ClipboardList className="w-4 h-4" />}
+            label="Current Orders"
+            active={view === 'orders'}
+            onClick={() => actions.setView('orders')}
+          />
+        )}
+        {/* Reports are for admins and managers. */}
         {!isServer && (
           <NavButton
             icon={<BarChart3 className="w-4 h-4" />}

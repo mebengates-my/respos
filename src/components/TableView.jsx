@@ -16,11 +16,13 @@ import {
   MoveRight,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { visibleOpenOrders } from '../utils/orderAccess';
 
 export default function TableView() {
   const { state, actions } = useApp();
   const confirm = useConfirm();
   const { tables, heldOrders, currentOrder } = state;
+  const openOrders = visibleOpenOrders(state);
   
   const [showHeldOrders, setShowHeldOrders] = React.useState(false);
   // Table transfer mode: id of the source table, or null
@@ -44,14 +46,18 @@ export default function TableView() {
       return;
     }
     
-    if (table.status === 'available') {
+    if (table.isCounter || table.status === 'available') {
       actions.selectTable(table);
       actions.setView('pos');
-      actions.addToast(`${table.isCounter ? 'Counter' : 'Table ' + table.number} selected`, 'info');
     } else if (table.status === 'occupied') {
-      // Resume the active order for this table
-      actions.selectTable(table);
-      actions.setView('pos');
+      // Resume the submitted order for this table. If the server visibility
+      // setting hides it, do not create a duplicate order on that table.
+      const order = openOrders.find(item => item.tableId === table.id);
+      if (order) {
+        actions.editOpenOrder(order);
+      } else {
+        actions.addToast('This table has an order you cannot open.', 'error');
+      }
     }
     // cleaning / reserved are handled via their action buttons
   };
@@ -122,10 +128,12 @@ export default function TableView() {
   
   const handleAction = (table, action) => {
     switch (action) {
-      case 'view':
-        actions.selectTable(table);
-        actions.setView('pos');
+      case 'view': {
+        const order = openOrders.find(item => item.tableId === table.id);
+        if (order) actions.editOpenOrder(order);
+        else actions.addToast('This table has an order you cannot open.', 'error');
         break;
+      }
       case 'transfer':
         startTransfer(table);
         break;
@@ -291,7 +299,7 @@ export default function TableView() {
           {/* Counter */}
           <div className="mb-6">
             <h2 className="text-sm font-semibold text-medium-roast mb-3 uppercase tracking-wider">
-              Counter
+              Walk-in customers
             </h2>
             <div className="grid grid-cols-1 gap-3">
               <TableCard
@@ -401,7 +409,7 @@ function TableCard({ table, isSelected, isTransferSource, transferMode, onClick,
       {/* Table info */}
       <div className="text-center">
         <h3 className="font-display text-2xl font-bold text-dark-roast">
-          {isCounter ? 'COUNTER' : table.number}
+          {isCounter ? 'WALK-IN' : table.number}
         </h3>
         <div className="flex items-center justify-center gap-2 mt-2 text-sm text-medium-roast">
           <Users className="w-4 h-4" />

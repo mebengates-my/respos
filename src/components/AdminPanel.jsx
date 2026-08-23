@@ -64,13 +64,14 @@ const AdminViews = {
   SETTINGS: 'settings'
 };
 
-// Managers get the same operational views as admins except user management and settings.
-const MANAGER_HIDDEN_VIEWS = [AdminViews.USERS, AdminViews.SETTINGS];
+// Managers can maintain operational settings (including server order access),
+// but user provisioning remains admin-only.
+const MANAGER_HIDDEN_VIEWS = [AdminViews.USERS];
 
 export default function AdminPanel() {
   const { state, actions } = useApp();
   const confirm = useConfirm();
-  const { language, users, categories, tables, menuItems, orderHistory, currentUser } = state;
+  const { language, users, currentUser } = state;
   const isManager = currentUser?.role === 'manager';
   // Start every management session on the operational overview rather than Settings.
   const [currentView, setCurrentView] = useState(AdminViews.DASHBOARD);
@@ -197,7 +198,7 @@ export default function AdminPanel() {
       {/* Main Content */}
       <main className="flex-1 overflow-auto">
         {currentView === AdminViews.DASHBOARD && <DashboardView language={language} state={state} userCount={userCount} />}
-        {currentView === AdminViews.OPEN_ORDERS && <OpenOrdersView language={language} state={state} />}
+        {currentView === AdminViews.OPEN_ORDERS && <OpenOrdersView language={language} state={state} actions={actions} />}
         {currentView === AdminViews.USERS && !isManager && (
           <UsersView
             language={language}
@@ -215,7 +216,7 @@ export default function AdminPanel() {
         {currentView === AdminViews.EXPENSES && <ExpensesView language={language} state={state} actions={actions} />}
         {currentView === AdminViews.EXPENSE_CATEGORIES && <ExpenseCategoriesView language={language} state={state} actions={actions} />}
         {currentView === AdminViews.PNL && <ProfitLossView language={language} state={state} />}
-        {currentView === AdminViews.SETTINGS && !isManager && <StoreSettingsView language={language} state={state} actions={actions} />}
+        {currentView === AdminViews.SETTINGS && <StoreSettingsView state={state} actions={actions} />}
       </main>
     </div>
   );
@@ -223,7 +224,7 @@ export default function AdminPanel() {
 
 // Dashboard
 function DashboardView({ language, state, userCount }) {
-  const { orderHistory, tables } = state;
+  const { orderHistory } = state;
   const today = new Date().setHours(0, 0, 0, 0);
   const todayOrders = orderHistory.filter(o => o.paidAt >= today);
   const todaySales = todayOrders.reduce((sum, o) => sum + o.total, 0);
@@ -254,8 +255,8 @@ function DashboardView({ language, state, userCount }) {
 }
 
 // Open Orders View — live board of every unpaid order (active + held)
-function OpenOrdersView({ language, state }) {
-  const { currentOrder, heldOrders, tables } = state;
+function OpenOrdersView({ language, state, actions }) {
+  const { openOrders: submittedOrders, heldOrders, tables } = state;
   const [, setTick] = useState(0);
 
   // Re-render periodically so the "time open" counters stay fresh. Order data itself
@@ -266,15 +267,14 @@ function OpenOrdersView({ language, state }) {
   }, []);
 
   const tableLabel = (tableId) => {
-    if (!tableId || tableId === 'COUNTER') return t('counter', language);
+    if (!tableId || tableId === 'COUNTER') return 'Walk-in';
     const table = tables.find(tb => tb.id === tableId);
     return table ? `${t('table', language)} ${table.number}` : tableId;
   };
 
-  const openOrders = [];
-  if (currentOrder && currentOrder.items.length > 0) {
-    openOrders.push({ ...currentOrder, boardStatus: 'active' });
-  }
+  // Drafts are intentionally excluded: an order appears here only after the
+  // server presses Place Order. Legacy held orders remain available too.
+  const openOrders = (submittedOrders || []).map(order => ({ ...order, boardStatus: 'open' }));
   heldOrders.forEach(order => openOrders.push({ ...order, boardStatus: 'held' }));
 
   // Occupied tables whose order is not otherwise visible on this device
@@ -284,6 +284,15 @@ function OpenOrdersView({ language, state }) {
   );
 
   const openValue = openOrders.reduce((sum, o) => sum + (o.total || 0), 0);
+
+  const openInPos = (order) => {
+    if (order.boardStatus === 'held') {
+      actions.recallOrder(order);
+      actions.setView('pos');
+    } else {
+      actions.editOpenOrder(order);
+    }
+  };
 
   return (
     <div className="p-6">
@@ -322,23 +331,23 @@ function OpenOrdersView({ language, state }) {
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
           {openOrders.map(order => {
             const itemCount = order.items.reduce((s, i) => s + i.quantity, 0);
-            const openedAt = order.boardStatus === 'held' ? order.heldAt : order.createdAt;
-            const isActive = order.boardStatus === 'active';
+            const openedAt = order.boardStatus === 'held' ? order.heldAt : (order.placedAt || order.createdAt);
+            const isOpen = order.boardStatus === 'open';
             return (
               <motion.div
                 key={order.id}
                 initial={{ opacity: 0, y: 12 }}
                 animate={{ opacity: 1, y: 0 }}
                 className={`bg-white rounded-2xl p-5 shadow-sm border-2 ${
-                  isActive ? 'border-accent' : 'border-warning/40'
+                  isOpen ? 'border-accent' : 'border-warning/40'
                 }`}
               >
                 <div className="flex items-center justify-between mb-3">
                   <h3 className="font-display font-bold text-lg text-dark-roast">{tableLabel(order.tableId)}</h3>
                   <span className={`px-2.5 py-1 rounded-full text-xs font-semibold ${
-                    isActive ? 'bg-accent/10 text-accent' : 'bg-warning/10 text-warning'
+                    isOpen ? 'bg-success/10 text-success' : 'bg-warning/10 text-warning'
                   }`}>
-                    {isActive ? t('activeNow', language) : t('held', language)}
+                    {isOpen ? 'Open' : t('held', language)}
                   </span>
                 </div>
                 <p className="text-xs text-medium-roast font-mono mb-3">{order.id}</p>
@@ -355,12 +364,21 @@ function OpenOrdersView({ language, state }) {
                 </ul>
                 <div className="flex items-center justify-between pt-3 border-t border-latte/20 text-sm">
                   <span className="text-medium-roast flex items-center gap-1.5">
-                    {isActive ? <ShoppingCart className="w-4 h-4" /> : <Pause className="w-4 h-4" />}
+                    {isOpen ? <ShoppingCart className="w-4 h-4" /> : <Pause className="w-4 h-4" />}
                     {itemCount} {t('items', language)}
                     {openedAt ? ` · ${formatElapsedTime(openedAt)}` : ''}
                   </span>
                   <span className="font-mono font-bold text-espresso">{formatPrice(order.total)}</span>
                 </div>
+                {order.serverName && (
+                  <p className="text-xs text-medium-roast mt-2">Server: {order.serverName}</p>
+                )}
+                <button
+                  onClick={() => openInPos(order)}
+                  className="w-full mt-4 py-2.5 px-4 bg-accent text-white rounded-xl font-semibold hover:bg-accent/90 btn-press"
+                >
+                  Open in POS
+                </button>
               </motion.div>
             );
           })}
@@ -844,11 +862,12 @@ function ReportsView({ language, state, actions }) {
 }
 
 // ==================== STORE SETTINGS VIEW (NEW!) ====================
-function StoreSettingsView({ language, state, actions }) {
+function StoreSettingsView({ state, actions }) {
   const [settings, setSettings] = useState(loadStoreSettings);
   const confirm = useConfirm();
   const [saved, setSaved] = useState(false);
   const [showDeleteStore, setShowDeleteStore] = useState(false);
+  const isManager = state.currentUser?.role === 'manager';
 
   // Tax master switch (default on for settings saved before it existed).
   const taxEnabled = settings.taxEnabled !== false;
@@ -874,10 +893,48 @@ function StoreSettingsView({ language, state, actions }) {
     navigate('/');
   };
 
-  const handleSave = () => {
-    saveStoreSettings(settings);
-    // Push the tax configuration into the POS so the cart re-prices immediately.
-    actions.setTaxSettings({ taxRate: settings.taxRate, taxEnabled });
+  const handleSave = async () => {
+    let settingsToSave = settings;
+
+    if (state.currentUser?.cloud && storeId && cloudAuth.isEnabled) {
+      // Managers only control the server-order switch. Merge it into the latest
+      // cloud value so they cannot overwrite Admin-only business/receipt data.
+      if (isManager) {
+        const { data, error: loadError } = await cloudAuth.getStoreSettings(storeId);
+        if (loadError) {
+          actions.addToast(loadError.message || 'Could not load shared settings', 'error');
+          return;
+        }
+        settingsToSave = {
+          ...data,
+          serverCanViewAllOrders: settings.serverCanViewAllOrders !== false,
+        };
+        const { error } = await cloudAuth.updateServerOrderVisibility(
+          storeId,
+          settingsToSave.serverCanViewAllOrders
+        );
+        if (error) {
+          actions.addToast(error.message || 'Could not save shared settings', 'error');
+          return;
+        }
+      } else {
+        const { error } = await cloudAuth.updateStoreSettings(storeId, settingsToSave);
+        if (error) {
+          actions.addToast(error.message || 'Could not save shared settings', 'error');
+          return;
+        }
+      }
+    }
+
+    saveStoreSettings(settingsToSave);
+    setSettings(settingsToSave);
+    // Push operational settings into this device immediately.
+    actions.setTaxSettings({
+      taxRate: settingsToSave.taxRate,
+      taxEnabled: settingsToSave.taxEnabled,
+    });
+    actions.setServerOrderVisibility(settingsToSave.serverCanViewAllOrders !== false);
+
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
     actions.addToast('Settings saved!', 'success');
@@ -897,6 +954,14 @@ function StoreSettingsView({ language, state, actions }) {
         taxRate: defaultStoreSettings.taxRate,
         taxEnabled: defaultStoreSettings.taxEnabled,
       });
+      actions.setServerOrderVisibility(defaultStoreSettings.serverCanViewAllOrders);
+      if (state.currentUser?.cloud && storeId && cloudAuth.isEnabled) {
+        const { error } = await cloudAuth.updateStoreSettings(storeId, defaultStoreSettings);
+        if (error) {
+          actions.addToast(error.message || 'Could not reset shared settings', 'error');
+          return;
+        }
+      }
       actions.addToast('Settings reset to default', 'info');
     }
   };
@@ -910,6 +975,7 @@ function StoreSettingsView({ language, state, actions }) {
       menuDataVersion: state.menuDataVersion,
       tables: state.tables,
       orderHistory: state.orderHistory,
+      openOrders: state.openOrders,
       heldOrders: state.heldOrders,
       categories: state.categories,
       menuItems: state.menuItems,
@@ -957,11 +1023,39 @@ function StoreSettingsView({ language, state, actions }) {
         const restored = loadStoreSettings();
         setSettings(restored);
         actions.setTaxSettings({ taxRate: restored.taxRate, taxEnabled: restored.taxEnabled });
+        actions.setServerOrderVisibility(restored.serverCanViewAllOrders);
       }
       actions.addToast('Backup restored', 'success');
     };
     reader.readAsText(file);
   };
+
+  // Managers get only the operational permission requested here; Admin-only
+  // business, backup and danger-zone settings remain hidden.
+  if (isManager) {
+    return (
+      <div className="p-6">
+        <div className="flex items-center justify-between mb-6">
+          <h1 className="text-2xl font-display font-bold text-dark-roast flex items-center gap-3">
+            <Settings className="w-7 h-7" />
+            Settings
+          </h1>
+          <button
+            onClick={handleSave}
+            className={`flex items-center gap-2 px-6 py-2 text-white rounded-xl ${
+              saved ? 'bg-success' : 'bg-accent hover:bg-accent/90'
+            }`}
+          >
+            {saved ? <Check className="w-5 h-5" /> : <Save className="w-5 h-5" />}
+            {saved ? 'Saved!' : 'Save Changes'}
+          </button>
+        </div>
+        <div className="max-w-3xl">
+          <ServerOrderAccessCard settings={settings} setSettings={setSettings} />
+        </div>
+      </div>
+    );
+  }
   
   return (
     <div className="p-6">
@@ -983,6 +1077,8 @@ function StoreSettingsView({ language, state, actions }) {
       </div>
       
       <div className="max-w-3xl space-y-6">
+        <ServerOrderAccessCard settings={settings} setSettings={setSettings} />
+
         {/* Business Info */}
         <div className="bg-white rounded-2xl shadow-sm overflow-hidden">
           <div className="p-4 bg-espresso text-white">
@@ -1209,6 +1305,45 @@ function StoreSettingsView({ language, state, actions }) {
           onDeleted={handleStoreDeleted}
         />
       )}
+    </div>
+  );
+}
+
+function ServerOrderAccessCard({ settings, setSettings }) {
+  const canViewAll = settings.serverCanViewAllOrders !== false;
+  return (
+    <div className="bg-white rounded-2xl shadow-sm overflow-hidden border border-accent/20">
+      <div className="p-4 bg-accent/10">
+        <h2 className="font-semibold flex items-center gap-2">
+          <ClipboardList className="w-5 h-5 text-accent" /> Server Order Access
+        </h2>
+      </div>
+      <div className="p-6">
+        <div className="flex items-center justify-between gap-6">
+          <div>
+            <p className="font-medium text-dark-roast">Servers can see all open orders</p>
+            <p className="text-sm text-medium-roast mt-1">
+              On: servers can view and edit every table and walk-in order. Off: each
+              server only sees orders placed by their own account.
+            </p>
+          </div>
+          <button
+            aria-label="Toggle server access to all open orders"
+            aria-pressed={canViewAll}
+            onClick={() => setSettings({ ...settings, serverCanViewAllOrders: !canViewAll })}
+            className={`relative w-14 h-8 rounded-full transition-colors shrink-0 ${
+              canViewAll ? 'bg-success' : 'bg-latte/30'
+            }`}
+          >
+            <div className={`absolute top-1 w-6 h-6 bg-white rounded-full shadow transition-all ${
+              canViewAll ? 'left-7' : 'left-1'
+            }`} />
+          </button>
+        </div>
+        <p className="text-xs text-medium-roast mt-3">
+          Default: all open orders are visible. Press Save Changes to apply.
+        </p>
+      </div>
     </div>
   );
 }

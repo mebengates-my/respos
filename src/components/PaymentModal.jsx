@@ -10,7 +10,6 @@ import {
   Loader2,
   Receipt,
   Printer,
-  PartyPopper,
   ArrowLeft,
   Calculator
 } from 'lucide-react';
@@ -23,7 +22,7 @@ const QUICK_CASH_AMOUNTS = [500, 1000, 2000, 5000, 10000, 20000];
 
 export default function PaymentModal() {
   const { state, actions } = useApp();
-  const { isPaymentModalOpen, currentOrder, paymentMethod, selectedTable } = state;
+  const { isPaymentModalOpen, currentOrder, paymentMethod } = state;
   const [step, setStep] = useState('select'); // 'select' | 'enter' | 'processing' | 'success'
   const [customAmount, setCustomAmount] = useState('');
   const [amountPaid, setAmountPaid] = useState(0);
@@ -53,7 +52,6 @@ export default function PaymentModal() {
   
   const total = currentOrder.total;
   const change = calculateChange(amountPaid, total);
-  const exactAmount = amountPaid >= total;
   
   const handlePayment = () => {
     setStep('processing');
@@ -68,7 +66,8 @@ export default function PaymentModal() {
         amountPaid,
         change,
         paidAt: Date.now(),
-        serverName: state.currentUser?.name,
+        serverName: currentOrder.serverName || state.currentUser?.name,
+        paidBy: state.currentUser?.name,
       };
       setLastPaidOrder(completedOrder);
 
