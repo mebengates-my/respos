@@ -1,7 +1,9 @@
 -- ============================================================
 -- Café POS — Supabase SaaS schema (multi-tenant)
 --
--- Run once in: Supabase Dashboard → SQL Editor → New query → Run
+-- Run in: Supabase Dashboard → SQL Editor → New query → Run.
+-- Re-run the WHOLE file after any app update that changes this
+-- schema — it only adds/refreshes what is missing.
 -- Every row below is scoped to a store (tenant). Row Level
 -- Security guarantees one store can never read/write another.
 --
@@ -710,3 +712,9 @@ end $$;
 -- creates their own store via register_store() and builds their
 -- own menu, tables and staff.
 -- ============================================================
+
+-- Make PostgREST pick up new/changed functions (e.g. set_server_price_access)
+-- immediately. Without this, freshly applied schema changes can keep raising
+-- "could not find the function … in the schema cache" until the cache is
+-- reloaded (Dashboard → API → Reload schema cache). Safe to re-run.
+notify pgrst, 'reload schema';

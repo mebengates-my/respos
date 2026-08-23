@@ -12,8 +12,11 @@ export const MENU_DATA_VERSION = 2;
 // and re-seed", so bumping it would wipe the menu of every store already
 // running. Trimming the starter set only needs to affect fresh installs, which
 // have no saved menu to keep.
+// A category flagged `isDefault: true` is a *default category*: the POS opens
+// with the first default category selected and its items on screen. Admins and
+// managers star/unstar categories in Category Management.
 export const categories = [
-  { id: 'rice', name: 'Biryani & Rice', icon: 'Utensils' },
+  { id: 'rice', name: 'Biryani & Rice', icon: 'Utensils', isDefault: true },
   { id: 'chicken', name: 'Chicken & Kabab', icon: 'Drumstick' },
   { id: 'bread', name: 'Roti, Paratha & Naan', icon: 'Croissant' },
   { id: 'drinks', name: 'Tea, Lassi & Drinks', icon: 'Coffee' },

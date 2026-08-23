@@ -28,6 +28,10 @@ Vercel (React app, from GitHub)          Supabase
 2. **Run the schema:** Dashboard → SQL Editor → paste the whole content of
    `supabase/schema.sql` → Run. This creates all tables, RLS policies,
    realtime publication and the `register_store()` sign-up function.
+   The file is idempotent — **re-run the whole file after every app update
+   that changes it**, so newer settings functions (e.g.
+   `set_server_price_access`) reach your database. Without that you may see
+   "could not find the function … in the schema cache" when saving settings.
 3. **Copy credentials:** Dashboard → Project Settings → API → *Project URL*
    and *anon public key*.
 4. **Local dev:** `cp .env.example .env.local`, paste the two values, restart
