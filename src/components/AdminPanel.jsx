@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
 import { t } from '../data/language';
+import { resolveModifierGroups } from '../data/menuData';
 import { loadStoreSettings, saveStoreSettings, defaultStoreSettings } from '../data/storeSettings';
 import { navigate } from '../utils/router';
 import DeleteStoreModal from './DeleteStoreModal';
@@ -8,6 +9,7 @@ import { downloadSalesReportPdf } from '../utils/pdfReport';
 import { formatElapsedTime } from '../utils/helpers';
 import { useConfirm } from './ConfirmDialog';
 import { cloudAuth } from '../services/cloud';
+import { orderLocationLabel } from '../utils/orderAccess';
 import {
   LayoutDashboard,
   Users,
@@ -46,7 +48,10 @@ import {
   CalendarDays,
   Upload,
   Database,
-  AlertTriangle
+  AlertTriangle,
+  Bike,
+  X,
+  PlusCircle
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -57,6 +62,7 @@ const AdminViews = {
   CATEGORIES: 'categories',
   MENU_ITEMS: 'menu_items',
   TABLES: 'tables',
+  DELIVERY: 'delivery',
   REPORTS: 'reports',
   EXPENSES: 'expenses',
   EXPENSE_CATEGORIES: 'expense_categories',
@@ -112,6 +118,7 @@ export default function AdminPanel() {
     { id: AdminViews.CATEGORIES, icon: Coffee, label: t('categoryManagement', language) },
     { id: AdminViews.MENU_ITEMS, icon: Coffee, label: t('menuItems', language) },
     { id: AdminViews.TABLES, icon: Grid3X3, label: t('tableManagement', language) },
+    { id: AdminViews.DELIVERY, icon: Bike, label: t('deliveryServices', language) },
     { id: AdminViews.REPORTS, icon: FileText, label: t('reportManagement', language) },
     { id: AdminViews.EXPENSES, icon: Wallet, label: t('expenses', language) },
     { id: AdminViews.EXPENSE_CATEGORIES, icon: Tags, label: t('expenseCategories', language) },
@@ -212,6 +219,7 @@ export default function AdminPanel() {
         {currentView === AdminViews.CATEGORIES && <CategoriesView language={language} state={state} actions={actions} />}
         {currentView === AdminViews.MENU_ITEMS && <MenuItemsView language={language} state={state} actions={actions} />}
         {currentView === AdminViews.TABLES && <TablesView language={language} state={state} actions={actions} />}
+        {currentView === AdminViews.DELIVERY && <DeliveryChannelsView language={language} state={state} actions={actions} />}
         {currentView === AdminViews.REPORTS && <ReportsView language={language} state={state} actions={actions} />}
         {currentView === AdminViews.EXPENSES && <ExpensesView language={language} state={state} actions={actions} />}
         {currentView === AdminViews.EXPENSE_CATEGORIES && <ExpenseCategoriesView language={language} state={state} actions={actions} />}
@@ -256,7 +264,7 @@ function DashboardView({ language, state, userCount }) {
 
 // Open Orders View — live board of every unpaid order (active + held)
 function OpenOrdersView({ language, state, actions }) {
-  const { openOrders: submittedOrders, heldOrders, tables } = state;
+  const { openOrders: submittedOrders, heldOrders, tables, deliveryChannels } = state;
   const [, setTick] = useState(0);
 
   // Re-render periodically so the "time open" counters stay fresh. Order data itself
@@ -266,11 +274,8 @@ function OpenOrdersView({ language, state, actions }) {
     return () => clearInterval(id);
   }, []);
 
-  const tableLabel = (tableId) => {
-    if (!tableId || tableId === 'COUNTER') return 'Walk-in';
-    const table = tables.find(tb => tb.id === tableId);
-    return table ? `${t('table', language)} ${table.number}` : tableId;
-  };
+  const tableLabel = (tableId, order) =>
+    orderLocationLabel(order, tables, t('walkIn', language), deliveryChannels);
 
   // Drafts are intentionally excluded: an order appears here only after the
   // server presses Place Order. Legacy held orders remain available too.
@@ -343,7 +348,7 @@ function OpenOrdersView({ language, state, actions }) {
                 }`}
               >
                 <div className="flex items-center justify-between mb-3">
-                  <h3 className="font-display font-bold text-lg text-dark-roast">{tableLabel(order.tableId)}</h3>
+                  <h3 className="font-display font-bold text-lg text-dark-roast">{tableLabel(order.tableId, order)}</h3>
                   <span className={`px-2.5 py-1 rounded-full text-xs font-semibold ${
                     isOpen ? 'bg-success/10 text-success' : 'bg-warning/10 text-warning'
                   }`}>
@@ -632,7 +637,10 @@ function CategoriesView({ language, state, actions }) {
   );
 }
 
-// Menu Items View (simplified - same as before)
+// Menu Items View — including per-item customization (modifier) management.
+// Each item can be marked customizable and given any number of option groups
+// (Spice Level, Size, Add-ons…) with priced options. What is configured here
+// is exactly what the POS shows when the item is tapped.
 function MenuItemsView({ language, state, actions }) {
   const { categories, menuItems } = state;
   const confirm = useConfirm();
@@ -641,8 +649,8 @@ function MenuItemsView({ language, state, actions }) {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('all');
   const [expandedCategory, setExpandedCategory] = useState(null);
-  const [formData, setFormData] = useState({ name: '', categoryId: categories[0]?.id || '', price: '', description: '', available: true });
-  
+  const [formData, setFormData] = useState(emptyItemForm(categories));
+
   const filteredItems = menuItems.filter(item => {
     const matchesCat = selectedCategory === 'all' || item.categoryId === selectedCategory;
     const matchesSearch = item.name.toLowerCase().includes(searchTerm.toLowerCase());
@@ -654,22 +662,60 @@ function MenuItemsView({ language, state, actions }) {
     acc[item.categoryId].push(item);
     return acc;
   }, {});
+
+  const openAdd = () => {
+    setEditingItem(null);
+    setFormData(emptyItemForm(categories));
+    setShowModal(true);
+  };
+
+  const openEdit = (item) => {
+    setEditingItem(item);
+    setFormData(itemToForm(item, categories));
+    setShowModal(true);
+  };
   
   const handleSubmit = () => {
     if (!formData.name || !formData.price || !formData.categoryId) return;
     const priceInCents = Math.round(parseFloat(formData.price) * 100);
-    if (editingItem) { actions.updateMenuItem(editingItem.id, { ...formData, price: priceInCents }); }
-    else { actions.addMenuItem({ ...formData, price: priceInCents }); }
+    const record = {
+      name: formData.name,
+      categoryId: formData.categoryId,
+      price: priceInCents,
+      description: formData.description,
+      available: formData.available,
+      // Persist the admin-configured groups and drop the legacy seed flag so
+      // resolveModifierGroups() only ever sees one source of truth.
+      modifiers: [],
+      modifierGroups: formData.customizable
+        ? formData.modifierGroups
+            .filter(group => group.name.trim())
+            .map(group => ({
+              id: group.id,
+              name: group.name.trim(),
+              options: group.options
+                .filter(option => option.name.trim())
+                .map(option => ({
+                  id: option.id,
+                  name: option.name.trim(),
+                  price: Math.round((parseFloat(option.price) || 0) * 100),
+                })),
+            }))
+            .filter(group => group.options.length > 0)
+        : [],
+    };
+    if (editingItem) { actions.updateMenuItem(editingItem.id, record); }
+    else { actions.addMenuItem(record); }
     setShowModal(false);
     setEditingItem(null);
-    setFormData({ name: '', categoryId: categories[0]?.id || '', price: '', description: '', available: true });
+    setFormData(emptyItemForm(categories));
   };
   
   return (
     <div className="p-6">
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-2xl font-display font-bold text-dark-roast">{t('menuItems', language)}</h1>
-        <button onClick={() => { setEditingItem(null); setFormData({ name: '', categoryId: categories[0]?.id || '', price: '', description: '', available: true }); setShowModal(true); }} className="flex items-center gap-2 px-4 py-2 bg-accent text-white rounded-xl"><Plus className="w-5 h-5" /> {t('addItem', language)}</button>
+        <button onClick={openAdd} className="flex items-center gap-2 px-4 py-2 bg-accent text-white rounded-xl"><Plus className="w-5 h-5" /> {t('addItem', language)}</button>
       </div>
       
       <div className="bg-white rounded-2xl p-4 shadow-sm mb-6">
@@ -697,20 +743,14 @@ function MenuItemsView({ language, state, actions }) {
               </button>
               <AnimatePresence>{isExpanded && items.length > 0 && (
                 <motion.div initial={{ height: 0 }} animate={{ height: 'auto' }} exit={{ height: 0 }} className="overflow-hidden"><div className="border-t border-latte/10">{items.map(item => (
-                  <div key={item.id} className={`flex items-center justify-between p-4 hover:bg-cream/50 ${!item.available ? 'bg-error/5' : ''}`}>
-                    <div className="flex-1"><div className="flex items-center gap-3"><h4 className={`font-medium ${!item.available ? 'text-medium-roast line-through' : ''}`}>{item.name}</h4>{!item.available && <span className="px-2 py-0.5 bg-error/10 text-error text-xs rounded-full">{t('itemUnavailable', language)}</span>}</div><p className="text-sm text-medium-roast">{item.description}</p></div>
-                    <div className="flex items-center gap-4"><span className="font-mono font-semibold text-espresso">RM {(item.price / 100).toFixed(2)}</span><button onClick={() => actions.toggleItemAvailability(item.id)} className={`p-2 rounded-lg ${item.available ? 'hover:bg-success/10 text-success' : 'hover:bg-error/10 text-error'}`}>{item.available ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}</button><button onClick={() => { setEditingItem(item); setFormData({ name: item.name, categoryId: item.categoryId, price: (item.price / 100).toString(), description: item.description || '', available: item.available }); setShowModal(true); }} className="p-2 hover:bg-latte/20 rounded-lg"><Edit className="w-4 h-4" /></button><button onClick={async () => { if (await confirm({ title: t('menuItems', language), message: t('confirmDelete', language), confirmLabel: t('delete', language), danger: true })) actions.deleteMenuItem(item.id); }} className="p-2 hover:bg-error/10 rounded-lg"><Trash2 className="w-4 h-4 text-error" /></button></div>
-                  </div>
+                  <ItemRow key={item.id} item={item} language={language} onToggle={() => actions.toggleItemAvailability(item.id)} onEdit={() => openEdit(item)} onDelete={async () => { if (await confirm({ title: t('menuItems', language), message: t('confirmDelete', language), confirmLabel: t('delete', language), danger: true })) actions.deleteMenuItem(item.id); }} />
                 ))}</div></motion.div>
               )}</AnimatePresence>
             </div>
           );
         }) : (
           <div className="bg-white rounded-2xl shadow-sm overflow-hidden"><div className="border-b border-latte/10">{filteredItems.map(item => (
-            <div key={item.id} className={`flex items-center justify-between p-4 hover:bg-cream/50 ${!item.available ? 'bg-error/5' : ''}`}>
-              <div className="flex-1"><div className="flex items-center gap-3"><h4 className={`font-medium ${!item.available ? 'text-medium-roast line-through' : ''}`}>{item.name}</h4>{!item.available && <span className="px-2 py-0.5 bg-error/10 text-error text-xs rounded-full">{t('itemUnavailable', language)}</span>}</div><p className="text-sm text-medium-roast">{item.description}</p></div>
-              <div className="flex items-center gap-4"><span className="font-mono font-semibold text-espresso">RM {(item.price / 100).toFixed(2)}</span><button onClick={() => actions.toggleItemAvailability(item.id)} className={`p-2 rounded-lg ${item.available ? 'hover:bg-success/10 text-success' : 'hover:bg-error/10 text-error'}`}>{item.available ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}</button><button onClick={() => { setEditingItem(item); setFormData({ name: item.name, categoryId: item.categoryId, price: (item.price / 100).toString(), description: item.description || '', available: item.available }); setShowModal(true); }} className="p-2 hover:bg-latte/20 rounded-lg"><Edit className="w-4 h-4" /></button><button onClick={async () => { if (await confirm({ title: t('menuItems', language), message: t('confirmDelete', language), confirmLabel: t('delete', language), danger: true })) actions.deleteMenuItem(item.id); }} className="p-2 hover:bg-error/10 rounded-lg"><Trash2 className="w-4 h-4 text-error" /></button></div>
-            </div>
+            <ItemRow key={item.id} item={item} language={language} onToggle={() => actions.toggleItemAvailability(item.id)} onEdit={() => openEdit(item)} onDelete={async () => { if (await confirm({ title: t('menuItems', language), message: t('confirmDelete', language), confirmLabel: t('delete', language), danger: true })) actions.deleteMenuItem(item.id); }} />
           ))}</div></div>
         )}
       </div>
@@ -725,6 +765,8 @@ function MenuItemsView({ language, state, actions }) {
               <div><label className="block text-sm font-medium text-medium-roast mb-2">{t('itemPrice', language)} (RM) *</label><input type="number" step="0.01" min="0" value={formData.price} onChange={e => setFormData({ ...formData, price: e.target.value })} className="w-full px-4 py-3 bg-cream border border-latte/30 rounded-xl focus:outline-none focus:border-accent font-mono" /></div>
               <div><label className="block text-sm font-medium text-medium-roast mb-2">{t('itemDescription', language)}</label><textarea value={formData.description} onChange={e => setFormData({ ...formData, description: e.target.value })} className="w-full px-4 py-3 bg-cream border border-latte/30 rounded-xl focus:outline-none focus:border-accent resize-none" rows={3} /></div>
               <div className="flex items-center justify-between p-4 bg-cream rounded-xl"><div><p className="font-medium">{t('itemAvailable', language)}</p><p className="text-sm text-medium-roast">Toggle availability</p></div><button onClick={() => setFormData({ ...formData, available: !formData.available })} className={`relative w-14 h-8 rounded-full transition-colors ${formData.available ? 'bg-success' : 'bg-latte/30'}`}><div className={`absolute top-1 w-6 h-6 bg-white rounded-full shadow transition-transform ${formData.available ? 'left-7' : 'left-1'}`} /></button></div>
+
+              <ModifierGroupsEditor formData={formData} setFormData={setFormData} language={language} />
             </div>
             <div className="flex gap-3 mt-6"><button onClick={() => setShowModal(false)} className="flex-1 py-3 bg-latte/10 rounded-xl font-medium">{t('cancel', language)}</button><button onClick={handleSubmit} disabled={!formData.name || !formData.price || !formData.categoryId} className="flex-1 py-3 bg-accent text-white rounded-xl font-medium disabled:opacity-50">{t('save', language)}</button></div>
           </motion.div>
@@ -734,6 +776,193 @@ function MenuItemsView({ language, state, actions }) {
   );
 }
 
+// Row in the menu items list — shows the Customizable badge when the item has
+// option groups configured.
+function ItemRow({ item, language, onToggle, onEdit, onDelete }) {
+  const groups = resolveModifierGroups(item);
+  const optionCount = groups.reduce((sum, group) => sum + group.options.length, 0);
+  return (
+    <div className={`flex items-center justify-between p-4 hover:bg-cream/50 ${!item.available ? 'bg-error/5' : ''}`}>
+      <div className="flex-1">
+        <div className="flex items-center gap-3 flex-wrap">
+          <h4 className={`font-medium ${!item.available ? 'text-medium-roast line-through' : ''}`}>{item.name}</h4>
+          {!item.available && <span className="px-2 py-0.5 bg-error/10 text-error text-xs rounded-full">{t('itemUnavailable', language)}</span>}
+          {groups.length > 0 && (
+            <span className="px-2 py-0.5 bg-accent/10 text-accent text-xs rounded-full" title={groups.map(group => group.name).join(', ')}>
+              {t('customizable', language)} · {groups.length} group{groups.length === 1 ? '' : 's'} · {optionCount} options
+            </span>
+          )}
+        </div>
+        <p className="text-sm text-medium-roast">{item.description}</p>
+      </div>
+      <div className="flex items-center gap-4">
+        <span className="font-mono font-semibold text-espresso">RM {(item.price / 100).toFixed(2)}</span>
+        <button onClick={onToggle} className={`p-2 rounded-lg ${item.available ? 'hover:bg-success/10 text-success' : 'hover:bg-error/10 text-error'}`}>{item.available ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}</button>
+        <button onClick={onEdit} className="p-2 hover:bg-latte/20 rounded-lg"><Edit className="w-4 h-4" /></button>
+        <button onClick={onDelete} className="p-2 hover:bg-error/10 rounded-lg"><Trash2 className="w-4 h-4 text-error" /></button>
+      </div>
+    </div>
+  );
+}
+
+// --- Customization form state helpers -------------------------------------
+// The form keeps group/option prices in RM strings (what the manager types);
+// handleSubmit converts them to cents for storage.
+function uid(prefix) {
+  return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+}
+
+function emptyItemForm(categories) {
+  return {
+    name: '',
+    categoryId: categories[0]?.id || '',
+    price: '',
+    description: '',
+    available: true,
+    customizable: false,
+    modifierGroups: [],
+  };
+}
+
+function itemToForm(item, categories) {
+  const groups = resolveModifierGroups(item);
+  return {
+    name: item.name,
+    categoryId: item.categoryId || categories[0]?.id || '',
+    price: (item.price / 100).toString(),
+    description: item.description || '',
+    available: item.available,
+    customizable: groups.length > 0,
+    modifierGroups: groups.map(group => ({
+      id: group.id || uid('grp'),
+      name: group.name,
+      options: group.options.map(option => ({
+        id: option.id || uid('opt'),
+        name: option.name,
+        price: ((option.price || 0) / 100).toString(),
+      })),
+    })),
+  };
+}
+
+// Editor for the item's customization groups (Spice Level, Size, …), each with
+// any number of priced options. Off = plain item added straight to the cart.
+function ModifierGroupsEditor({ formData, setFormData, language }) {
+  const customizable = formData.customizable;
+  const groups = formData.modifierGroups;
+
+  const setGroups = (modifierGroups) => setFormData({ ...formData, modifierGroups });
+
+  const addGroup = () => setGroups([...groups, { id: uid('grp'), name: '', options: [{ id: uid('opt'), name: '', price: '' }] }]);
+  const updateGroup = (groupId, updates) => setGroups(groups.map(group => group.id === groupId ? { ...group, ...updates } : group));
+  const removeGroup = (groupId) => setGroups(groups.filter(group => group.id !== groupId));
+
+  const addOption = (groupId) => setGroups(groups.map(group =>
+    group.id === groupId ? { ...group, options: [...group.options, { id: uid('opt'), name: '', price: '' }] } : group
+  ));
+  const updateOption = (groupId, optionId, updates) => setGroups(groups.map(group =>
+    group.id === groupId
+      ? { ...group, options: group.options.map(option => option.id === optionId ? { ...option, ...updates } : option) }
+      : group
+  ));
+  const removeOption = (groupId, optionId) => setGroups(groups.map(group =>
+    group.id === groupId
+      ? { ...group, options: group.options.filter(option => option.id !== optionId) }
+      : group
+  ));
+
+  return (
+    <div className="border border-latte/20 rounded-xl overflow-hidden">
+      <div className="flex items-center justify-between p-4 bg-cream">
+        <div>
+          <p className="font-medium">{t('customizationOptions', language)}</p>
+          <p className="text-sm text-medium-roast">{t('customizationOptionsHint', language)}</p>
+        </div>
+        <button
+          onClick={() => setFormData({ ...formData, customizable: !customizable })}
+          className={`relative w-14 h-8 rounded-full transition-colors shrink-0 ${customizable ? 'bg-success' : 'bg-latte/30'}`}
+        >
+          <div className={`absolute top-1 w-6 h-6 bg-white rounded-full shadow transition-transform ${customizable ? 'left-7' : 'left-1'}`} />
+        </button>
+      </div>
+
+      {customizable && (
+        <div className="p-4 space-y-4">
+          {groups.length === 0 && (
+            <p className="text-sm text-medium-roast text-center py-2">{t('noCustomizationGroups', language)}</p>
+          )}
+          {groups.map(group => (
+            <div key={group.id} className="border border-latte/30 rounded-xl p-3 space-y-2">
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  value={group.name}
+                  onChange={e => updateGroup(group.id, { name: e.target.value })}
+                  placeholder={t('groupNamePlaceholder', language)}
+                  className="flex-1 px-3 py-2 bg-cream border border-latte/30 rounded-lg font-medium focus:outline-none focus:border-accent"
+                />
+                <button
+                  onClick={() => removeGroup(group.id)}
+                  className="p-2 hover:bg-error/10 rounded-lg shrink-0"
+                  title={t('delete', language)}
+                >
+                  <Trash2 className="w-4 h-4 text-error" />
+                </button>
+              </div>
+
+              {group.options.map(option => (
+                <div key={option.id} className="flex items-center gap-2 pl-2">
+                  <input
+                    type="text"
+                    value={option.name}
+                    onChange={e => updateOption(group.id, option.id, { name: e.target.value })}
+                    placeholder={t('optionNamePlaceholder', language)}
+                    className="flex-1 px-3 py-1.5 bg-white border border-latte/30 rounded-lg text-sm focus:outline-none focus:border-accent"
+                  />
+                  <div className="relative w-24 shrink-0">
+                    <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-xs text-medium-roast">RM</span>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      value={option.price}
+                      onChange={e => updateOption(group.id, option.id, { price: e.target.value })}
+                      placeholder="0.00"
+                      className="w-full pl-8 pr-2 py-1.5 bg-white border border-latte/30 rounded-lg text-sm font-mono focus:outline-none focus:border-accent"
+                    />
+                  </div>
+                  <button
+                    onClick={() => removeOption(group.id, option.id)}
+                    className="p-1.5 hover:bg-error/10 rounded-lg shrink-0"
+                    title={t('delete', language)}
+                  >
+                    <X className="w-4 h-4 text-error" />
+                  </button>
+                </div>
+              ))}
+
+              <button
+                onClick={() => addOption(group.id)}
+                className="flex items-center gap-1.5 text-sm font-medium text-accent hover:text-accent/80 pl-2"
+              >
+                <PlusCircle className="w-4 h-4" />
+                {t('addOption', language)}
+              </button>
+            </div>
+          ))}
+
+          <button
+            onClick={addGroup}
+            className="w-full flex items-center justify-center gap-2 py-2.5 border-2 border-dashed border-latte/40 rounded-xl text-sm font-medium text-medium-roast hover:border-accent hover:text-accent transition-colors"
+          >
+            <Plus className="w-4 h-4" />
+            {t('addGroup', language)}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
 // Tables View
 function TablesView({ language, state, actions }) {
   const { tables } = state;
@@ -776,6 +1005,175 @@ function TablesView({ language, state, actions }) {
               <div><label className="block text-sm font-medium text-medium-roast mb-2">{t('tableCapacity', language)}</label><div className="grid grid-cols-4 gap-2">{[2, 4, 6, 8].map(cap => (<button key={cap} onClick={() => setFormData({ ...formData, capacity: cap })} className={`py-3 rounded-xl font-medium ${formData.capacity === cap ? 'bg-accent text-white' : 'bg-cream'}`}>{cap}</button>))}</div></div>
             </div>
             <div className="flex gap-3 mt-6"><button onClick={() => setShowModal(false)} className="flex-1 py-3 bg-latte/10 rounded-xl font-medium">{t('cancel', language)}</button><button onClick={handleSubmit} disabled={!formData.number} className="flex-1 py-3 bg-accent text-white rounded-xl font-medium disabled:opacity-50">{t('save', language)}</button></div>
+          </motion.div>
+        </motion.div>
+      )}</AnimatePresence>
+    </div>
+  );
+}
+
+// Delivery Services View — the food-delivery companies this store accepts
+// (GrabFood, foodpanda, Shopee Food, …). Everything configured here appears as
+// a tappable icon in the POS order panel next to walk-in and the tables.
+// Managers and admins both maintain the list, exactly like table management.
+function DeliveryChannelsView({ language, state, actions }) {
+  const { deliveryChannels } = state;
+  const confirm = useConfirm();
+  const [showModal, setShowModal] = useState(false);
+  const [editingChannel, setEditingChannel] = useState(null);
+  const [formData, setFormData] = useState({ name: '', emoji: '🛵', color: '#00B14F', active: true });
+
+  const emojiChoices = ['🛵', '🏍️', '🚴', '🐼', '🛍️', '🍔', '🥡', '📦', '🚗', '🧋'];
+  const colorChoices = ['#00B14F', '#D70F64', '#EE4D2D', '#F8AD1F', '#2F80ED', '#7048E8', '#E8590C', '#4C4C4C'];
+
+  const openAdd = () => {
+    setEditingChannel(null);
+    setFormData({ name: '', emoji: '🛵', color: '#00B14F', active: true });
+    setShowModal(true);
+  };
+
+  const openEdit = (channel) => {
+    setEditingChannel(channel);
+    setFormData({
+      name: channel.name,
+      emoji: channel.emoji || '🛵',
+      color: channel.color || '#00B14F',
+      active: channel.active !== false,
+    });
+    setShowModal(true);
+  };
+
+  const handleSubmit = () => {
+    if (!formData.name.trim()) return;
+    const payload = {
+      name: formData.name.trim(),
+      emoji: formData.emoji,
+      color: formData.color,
+      active: formData.active !== false,
+    };
+    if (editingChannel) { actions.updateDeliveryChannel(editingChannel.id, payload); }
+    else { actions.addDeliveryChannel(payload); }
+    setShowModal(false);
+    setEditingChannel(null);
+  };
+
+  const handleDelete = async (channel) => {
+    const ok = await confirm({
+      title: t('deleteDeliveryService', language),
+      message: `Remove ${channel.name} from the POS order screen? Open orders already placed through it are not affected.`,
+      confirmLabel: t('delete', language),
+      danger: true,
+    });
+    if (ok) actions.deleteDeliveryChannel(channel.id);
+  };
+
+  return (
+    <div className="p-6">
+      <div className="flex items-center justify-between mb-2">
+        <h1 className="text-2xl font-display font-bold text-dark-roast flex items-center gap-3">
+          <Bike className="w-7 h-7" />
+          {t('deliveryServices', language)}
+        </h1>
+        <button onClick={openAdd} className="flex items-center gap-2 px-4 py-2 bg-accent text-white rounded-xl hover:bg-accent/90">
+          <Plus className="w-5 h-5" /> {t('addDeliveryService', language)}
+        </button>
+      </div>
+      <p className="text-sm text-medium-roast mb-6 max-w-2xl">
+        {t('deliveryServicesHint', language)}
+      </p>
+
+      {deliveryChannels.length === 0 ? (
+        <div className="bg-white rounded-2xl p-12 shadow-sm text-center">
+          <Bike className="w-10 h-10 text-latte mx-auto mb-3" />
+          <p className="text-medium-roast">{t('noDeliveryServices', language)}</p>
+        </div>
+      ) : (
+        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-4">
+          {deliveryChannels.map(channel => (
+            <div key={channel.id} className="bg-white rounded-2xl p-4 shadow-sm">
+              <div className="flex items-center justify-between mb-3">
+                <div
+                  className="w-12 h-12 rounded-xl flex items-center justify-center text-2xl"
+                  style={{ backgroundColor: `${channel.color || '#4C4C4C'}1F` }}
+                >
+                  <span aria-hidden="true">{channel.emoji || '🛵'}</span>
+                </div>
+                <div className="flex gap-1">
+                  <button onClick={() => openEdit(channel)} className="p-1.5 hover:bg-latte/20 rounded-lg"><Edit className="w-4 h-4" /></button>
+                  <button onClick={() => handleDelete(channel)} className="p-1.5 hover:bg-error/10 rounded-lg"><Trash2 className="w-4 h-4 text-error" /></button>
+                </div>
+              </div>
+              <h3 className="font-semibold text-dark-roast truncate">{channel.name}</h3>
+              <div className="mt-2 flex items-center gap-2">
+                <div className={`w-2 h-2 rounded-full ${channel.active !== false ? 'bg-success' : 'bg-latte'}`} />
+                <span className="text-xs text-medium-roast">{channel.active !== false ? t('active', language) : t('inactive', language)}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <AnimatePresence>{showModal && (
+        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={() => setShowModal(false)}>
+          <motion.div initial={{ scale: 0.95 }} animate={{ scale: 1 }} exit={{ scale: 0.95 }} className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6" onClick={e => e.stopPropagation()}>
+            <h2 className="text-xl font-display font-bold mb-6">{editingChannel ? t('editDeliveryService', language) : t('addDeliveryService', language)}</h2>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-medium-roast mb-2">{t('deliveryServiceName', language)}</label>
+                <input
+                  type="text"
+                  value={formData.name}
+                  onChange={e => setFormData({ ...formData, name: e.target.value })}
+                  placeholder="e.g. GrabFood, foodpanda, Shopee Food…"
+                  className="w-full px-4 py-3 bg-cream border border-latte/30 rounded-xl focus:outline-none focus:border-accent"
+                  autoFocus
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-medium-roast mb-2">{t('deliveryServiceIcon', language)}</label>
+                <div className="flex flex-wrap gap-2">
+                  {emojiChoices.map(emoji => (
+                    <button
+                      key={emoji}
+                      onClick={() => setFormData({ ...formData, emoji })}
+                      className={`w-11 h-11 rounded-xl text-xl transition-colors ${formData.emoji === emoji ? 'bg-accent/10 ring-2 ring-accent' : 'bg-cream hover:bg-latte/20'}`}
+                    >
+                      <span aria-hidden="true">{emoji}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-medium-roast mb-2">{t('deliveryServiceColor', language)}</label>
+                <div className="flex flex-wrap gap-2">
+                  {colorChoices.map(color => (
+                    <button
+                      key={color}
+                      onClick={() => setFormData({ ...formData, color })}
+                      aria-label={color}
+                      className={`w-9 h-9 rounded-full transition-transform ${formData.color === color ? 'ring-2 ring-espresso ring-offset-2' : 'hover:scale-105'}`}
+                      style={{ backgroundColor: color }}
+                    />
+                  ))}
+                </div>
+              </div>
+              <div className="flex items-center justify-between p-4 bg-cream rounded-xl">
+                <div>
+                  <p className="font-medium">{t('deliveryServiceActive', language)}</p>
+                  <p className="text-sm text-medium-roast">{t('deliveryServiceActiveHint', language)}</p>
+                </div>
+                <button
+                  onClick={() => setFormData({ ...formData, active: !formData.active })}
+                  className={`relative w-14 h-8 rounded-full transition-colors ${formData.active ? 'bg-success' : 'bg-latte/30'}`}
+                >
+                  <div className={`absolute top-1 w-6 h-6 bg-white rounded-full shadow transition-transform ${formData.active ? 'left-7' : 'left-1'}`} />
+                </button>
+              </div>
+            </div>
+            <div className="flex gap-3 mt-6">
+              <button onClick={() => setShowModal(false)} className="flex-1 py-3 bg-latte/10 rounded-xl font-medium">{t('cancel', language)}</button>
+              <button onClick={handleSubmit} disabled={!formData.name.trim()} className="flex-1 py-3 bg-accent text-white rounded-xl font-medium disabled:opacity-50">{t('save', language)}</button>
+            </div>
           </motion.div>
         </motion.div>
       )}</AnimatePresence>
@@ -974,6 +1372,7 @@ function StoreSettingsView({ state, actions }) {
       exportedAt: new Date().toISOString(),
       menuDataVersion: state.menuDataVersion,
       tables: state.tables,
+      deliveryChannels: state.deliveryChannels,
       orderHistory: state.orderHistory,
       openOrders: state.openOrders,
       heldOrders: state.heldOrders,

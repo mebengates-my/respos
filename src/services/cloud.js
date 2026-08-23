@@ -384,6 +384,29 @@ export const cloudAuth = {
 const isUuid = (value) =>
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || ''));
 
+// The orders.delivery_channel column arrives with an idempotent schema
+// migration (see supabase/schema.sql). Projects that have not re-run it yet
+// must keep working, so probe once per session whether the column exists; when
+// it does not, the delivery label simply stays on the ordering device and the
+// order is stored exactly as before.
+let ordersDeliveryColumnSupported = null;
+async function supportsDeliveryChannelColumn() {
+  if (!isCloudEnabled) return false;
+  if (ordersDeliveryColumnSupported !== null) return ordersDeliveryColumnSupported;
+  const { error } = await supabase.from('orders').select('delivery_channel').limit(1);
+  // PGRST204 = unknown column. Any other outcome (including a permission
+  // error) means the table itself is fine — let the real write report issues.
+  ordersDeliveryColumnSupported = !error || error.code !== 'PGRST204';
+  return ordersDeliveryColumnSupported;
+}
+
+async function applyDeliveryChannel(row, order) {
+  if (order?.deliveryChannel?.name && await supportsDeliveryChannelColumn()) {
+    row.delivery_channel = order.deliveryChannel.name;
+  }
+  return row;
+}
+
 function fromOrderRow(row) {
   const asMillis = (value) => value ? new Date(value).getTime() : null;
   return {
@@ -391,6 +414,11 @@ function fromOrderRow(row) {
     cloudId: row.id,
     status: row.status,
     tableId: row.table_ref || 'COUNTER',
+    // Delivery channel stored by name (the label shown everywhere). Renaming a
+    // service later does not rewrite history, which receipts prefer anyway.
+    deliveryChannel: row.delivery_channel
+      ? { id: row.delivery_channel, name: row.delivery_channel }
+      : null,
     items: Array.isArray(row.items) ? row.items : [],
     subtotal: row.subtotal_cents || 0,
     tax: row.tax_cents || 0,
@@ -445,11 +473,12 @@ export const cloudOrders = {
   async saveOpen({ storeId, userId, order }) {
     if (!isCloudEnabled) return { data: order, error: null };
     const durableId = order.cloudId || (isUuid(order.id) ? order.id : null);
+    const row = await applyDeliveryChannel(toOrderRow(order, storeId, userId, durableId === null), order);
     let result;
     if (durableId) {
       result = await supabase
         .from('orders')
-        .update(toOrderRow(order, storeId, userId, false))
+        .update(row)
         .eq('id', durableId)
         .eq('store_id', storeId)
         .select('*')
@@ -457,7 +486,7 @@ export const cloudOrders = {
     } else {
       result = await supabase
         .from('orders')
-        .insert(toOrderRow(order, storeId, userId, true))
+        .insert(row)
         .select('*')
         .single();
     }
@@ -497,6 +526,9 @@ export const cloudOrders = {
         amount_paid_cents: amountPaid,
         change_cents: change,
         paid_at: new Date().toISOString(),
+        ...(order.deliveryChannel?.name && await supportsDeliveryChannelColumn()
+          ? { delivery_channel: order.deliveryChannel.name }
+          : {}),
       })
       .eq('id', id)
       .eq('store_id', storeId)

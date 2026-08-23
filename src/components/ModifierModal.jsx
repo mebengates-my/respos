@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useApp } from '../context/AppContext';
-import { modifiers as modifierOptions } from '../data/menuData';
+import { resolveModifierGroups } from '../data/menuData';
 import { formatPrice } from '../utils/helpers';
 import { X, Plus, Minus, Check, ShoppingBag } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -15,13 +15,9 @@ export default function ModifierModal() {
   
   if (!isModifierModalOpen || !selectedMenuItem) return null;
   
-  const availableModifierGroups = (selectedMenuItem.modifiers || [])
-    .map(modId => ({
-      id: modId,
-      name: modId.charAt(0).toUpperCase() + modId.slice(1).replace(/-/g, ' '),
-      options: modifierOptions[modId] || [],
-    }))
-    .filter(group => group.options.length > 0);
+  // Groups come from the item itself — either the admin-configured
+  // `modifierGroups` or the built-in starter sets for legacy seed items.
+  const availableModifierGroups = resolveModifierGroups(selectedMenuItem);
   
   const toggleModifier = (modifier) => {
     setSelectedModifiers(prev => {

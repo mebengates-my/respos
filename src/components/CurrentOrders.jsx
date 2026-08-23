@@ -17,7 +17,7 @@ export default function CurrentOrders() {
   };
 
   const cancelOrder = async (order) => {
-    const location = orderLocationLabel(order, state.tables);
+    const location = orderLocationLabel(order, state.tables, 'Walk-in', state.deliveryChannels);
     const ok = await confirm({
       title: 'Cancel open order?',
       message: `Cancel the order for ${location}? This removes it from the open orders list.`,
@@ -80,7 +80,7 @@ export default function CurrentOrders() {
                   <div className="p-4 border-b border-latte/20 flex items-start justify-between gap-3">
                     <div>
                       <h2 className="font-display font-bold text-lg text-dark-roast">
-                        {orderLocationLabel(order, state.tables)}
+                        {orderLocationLabel(order, state.tables, 'Walk-in', state.deliveryChannels)}
                       </h2>
                       <p className="text-xs font-mono text-medium-roast mt-0.5">#{String(order.id).slice(-8)}</p>
                     </div>
@@ -131,7 +131,7 @@ export default function CurrentOrders() {
                       disabled={busyId === order.id}
                       className="p-2.5 bg-error/10 text-error rounded-xl hover:bg-error/20 disabled:opacity-50 btn-press"
                       title="Cancel order"
-                      aria-label={`Cancel ${orderLocationLabel(order, state.tables)} order`}
+                      aria-label={`Cancel ${orderLocationLabel(order, state.tables, 'Walk-in', state.deliveryChannels)} order`}
                     >
                       <Trash2 className="w-5 h-5" />
                     </button>

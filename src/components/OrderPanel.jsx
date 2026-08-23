@@ -15,7 +15,8 @@ import {
   X,
   Percent,
   Send,
-  LoaderCircle
+  LoaderCircle,
+  Footprints
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useConfirm } from './ConfirmDialog';
@@ -27,12 +28,14 @@ export default function OrderPanel() {
   const {
     currentOrder,
     selectedTable,
+    selectedDeliveryChannel,
     taxRate,
     taxEnabled,
     discountPresets: presets,
     heldOrders,
     openOrders,
     tables,
+    deliveryChannels,
     currentUser,
   } = state;
   const confirm = useConfirm();
@@ -52,8 +55,7 @@ export default function OrderPanel() {
     setNoteText(currentOrder?.notes || '');
   }, [currentOrder?.id, currentOrder?.notes]);
 
-  const handleTableChange = (event) => {
-    const tableId = event.target.value;
+  const handleTableChange = (tableId) => {
     const table = tables.find(item => item.id === tableId)
       || tables.find(item => item.isCounter)
       || null;
@@ -71,6 +73,13 @@ export default function OrderPanel() {
       return;
     }
     actions.selectTable(table);
+  };
+
+  // Delivery chips simply re-aim the (new or in-progress) order at a channel —
+  // unlike tables there is no one-open-order rule, several couriers can wait.
+  const handleDeliverySelect = (channel) => {
+    if (channel.active === false) return;
+    actions.selectDeliveryChannel(channel);
   };
 
   const handlePlaceOrder = async () => {
@@ -139,9 +148,11 @@ export default function OrderPanel() {
             </div>
             <div>
               <h2 className="font-semibold text-dark-roast">
-                {selectedTable?.isCounter || !selectedTable
-                  ? 'Walk-in customer'
-                  : `Table ${selectedTable.number}`}
+                {selectedDeliveryChannel
+                  ? `${selectedDeliveryChannel.emoji || '🛵'} ${selectedDeliveryChannel.name}`
+                  : selectedTable?.isCounter || !selectedTable
+                    ? 'Walk-in customer'
+                    : `Table ${selectedTable.number}`}
               </h2>
               <p className="text-xs text-medium-roast">
                 {currentOrder?.isEditing ? 'Editing placed order' : (currentOrder?.id || 'New order')}
@@ -183,29 +194,21 @@ export default function OrderPanel() {
         </div>
 
         {/* The location is selected before items are placed. Walk-in is the
-            default; choosing an occupied table opens its current order. */}
+            default; tables and food-delivery services are one tap away. */}
         <div className="mt-3">
-          <label htmlFor="order-table" className="block text-xs font-semibold text-medium-roast mb-1.5 uppercase tracking-wider">
+          <span className="block text-xs font-semibold text-medium-roast mb-1.5 uppercase tracking-wider">
             Order for
-          </label>
-          <select
-            id="order-table"
-            value={selectedTable?.id || 'COUNTER'}
-            onChange={handleTableChange}
-            className="w-full px-3 py-2.5 bg-white border border-latte/30 rounded-xl text-sm font-semibold text-dark-roast focus:outline-none focus:border-accent"
-          >
-            <option value="COUNTER">Walk-in customer</option>
-            {tables.filter(table => !table.isCounter).map(table => {
-              const existing = accessibleOpenOrders.find(order => order.tableId === table.id);
-              const unavailable = table.status === 'reserved' || table.status === 'cleaning'
-                || (table.status === 'occupied' && !existing && currentOrder?.tableId !== table.id);
-              return (
-                <option key={table.id} value={table.id} disabled={unavailable}>
-                  Table {table.number}{existing ? ' — open order' : unavailable ? ` — ${table.status}` : ''}
-                </option>
-              );
-            })}
-          </select>
+          </span>
+          <OrderTargetSelector
+            tables={tables}
+            deliveryChannels={deliveryChannels}
+            selectedTable={selectedTable}
+            selectedDeliveryChannel={selectedDeliveryChannel}
+            openOrders={accessibleOpenOrders}
+            currentOrder={currentOrder}
+            onSelectTable={handleTableChange}
+            onSelectDelivery={handleDeliverySelect}
+          />
         </div>
         
         {/* Notes input */}
@@ -360,8 +363,9 @@ export default function OrderPanel() {
           )}
         </div>
         
-        {/* Quick discount button */}
-        {!currentOrder?.discount && currentOrder?.items.length > 0 && (
+        {/* Quick discount button — discounts are an Admin/Manager action;
+            servers never see discount controls. */}
+        {!isServer && !currentOrder?.discount && currentOrder?.items.length > 0 && (
           <button
             onClick={() => setShowDiscounts(!showDiscounts)}
             className="w-full mb-3 flex items-center justify-center gap-2 px-4 py-2 bg-latte/10 text-espresso rounded-lg text-sm font-medium hover:bg-latte/20 transition-colors btn-press"
@@ -411,28 +415,31 @@ export default function OrderPanel() {
           </div>
         )}
 
-        {/* Servers place/update an unpaid order; managers receive it live. */}
-        {isServer ? (
-          <button
-            onClick={handlePlaceOrder}
-            disabled={isEmpty || isSubmitting}
-            className={`w-full flex items-center justify-center gap-2 px-4 py-4 rounded-xl font-semibold text-lg transition-all btn-press ${
-              isEmpty || isSubmitting
-                ? 'bg-latte/30 text-latte cursor-not-allowed'
-                : 'bg-accent text-white hover:bg-accent/90 shadow-lg shadow-accent/30'
-            }`}
-          >
-            {isSubmitting
-              ? <LoaderCircle className="w-5 h-5 animate-spin" />
-              : <Send className="w-5 h-5" />}
-            {isSubmitting
-              ? 'Placing…'
-              : currentOrder?.isEditing || openOrders.some(order => order.id === currentOrder?.id)
-                ? 'Update Order'
-                : 'Place Order'}
-          </button>
-        ) : (
-          <div className="grid grid-cols-3 gap-2">
+        {/* Everyone who takes orders — server, manager and admin — sends the
+            order to the kitchen with this button. Servers stop here; managers
+            and admins can also collect payment right away. */}
+        <button
+          onClick={handlePlaceOrder}
+          disabled={isEmpty || isSubmitting}
+          className={`w-full flex items-center justify-center gap-2 px-4 py-4 rounded-xl font-semibold text-lg transition-all btn-press ${
+            isEmpty || isSubmitting
+              ? 'bg-latte/30 text-latte cursor-not-allowed'
+              : 'bg-accent text-white hover:bg-accent/90 shadow-lg shadow-accent/30'
+          }`}
+        >
+          {isSubmitting
+            ? <LoaderCircle className="w-5 h-5 animate-spin" />
+            : <Send className="w-5 h-5" />}
+          {isSubmitting
+            ? 'Placing…'
+            : currentOrder?.isEditing || openOrders.some(order => order.id === currentOrder?.id)
+              ? 'Update Order'
+              : 'Place Order'}
+        </button>
+
+        {/* Collecting money stays reserved for Admin/Manager. */}
+        {!isServer && (
+          <div className="grid grid-cols-3 gap-2 mt-2">
             <button
               onClick={() => actions.openPaymentModal('cash')}
               disabled={isEmpty}
@@ -492,6 +499,127 @@ function EmptyOrderState() {
       <p className="text-sm text-medium-roast max-w-[200px]">
         Select items from the menu to start building your order
       </p>
+    </div>
+  );
+}
+
+// One-tap destination picker shown at the top of the cart: walk-in, every
+// dining table (as a numbered tile), and each configured food-delivery
+// service. Replaces the old dropdown so a server can switch target with a
+// single tap instead of scrolling a list.
+function OrderTargetSelector({
+  tables,
+  deliveryChannels,
+  selectedTable,
+  selectedDeliveryChannel,
+  openOrders,
+  currentOrder,
+  onSelectTable,
+  onSelectDelivery,
+}) {
+  const diningTables = tables.filter(table => !table.isCounter);
+  // Inactive services are configured in the panel but hidden from the POS.
+  const activeChannels = (deliveryChannels || []).filter(channel => channel.active !== false);
+  const walkInSelected = !selectedDeliveryChannel && (selectedTable?.isCounter || !selectedTable);
+  const selectedTableId = selectedDeliveryChannel ? null : selectedTable?.id || 'COUNTER';
+
+  const tableState = (table) => {
+    const existing = openOrders.find(order => order.tableId === table.id);
+    const unavailable = table.status === 'reserved' || table.status === 'cleaning'
+      || (table.status === 'occupied' && !existing && currentOrder?.tableId !== table.id);
+    const isEditingThis = currentOrder?.tableId === table.id;
+    return { existing, unavailable, isEditingThis };
+  };
+
+  return (
+    <div className="max-h-40 overflow-y-auto pr-0.5 space-y-2">
+      <div className="flex flex-wrap gap-2">
+        {/* Walk-in */}
+        <button
+          type="button"
+          onClick={() => onSelectTable('COUNTER')}
+          className={`flex items-center gap-1.5 px-3 py-2 rounded-xl border-2 text-sm font-semibold transition-all btn-press ${
+            walkInSelected
+              ? 'border-accent bg-accent text-white shadow-md'
+              : 'border-latte/30 bg-white text-dark-roast hover:border-latte/60'
+          }`}
+          title="Walk-in customer"
+        >
+          <Footprints className="w-4 h-4" />
+          Walk-in
+        </button>
+
+        {/* Dining tables as numbered tiles */}
+        {diningTables.map(table => {
+          const { existing, unavailable, isEditingThis } = tableState(table);
+          const isSelected = selectedTableId === table.id;
+          return (
+            <button
+              key={table.id}
+              type="button"
+              disabled={unavailable}
+              onClick={() => onSelectTable(table.id)}
+              className={`relative w-11 h-11 rounded-xl border-2 font-display font-bold text-base transition-all ${
+                unavailable
+                  ? 'border-latte/20 bg-latte/10 text-latte cursor-not-allowed'
+                  : isSelected
+                    ? 'border-accent bg-accent text-white shadow-md btn-press'
+                    : 'border-latte/30 bg-white text-dark-roast hover:border-latte/60 btn-press'
+              }`}
+              title={
+                unavailable
+                  ? `Table ${table.number} — ${table.status}`
+                  : existing
+                    ? `Table ${table.number} — open order`
+                    : `Table ${table.number}`
+              }
+            >
+              {table.number}
+              {/* Live status dot */}
+              <span
+                className={`absolute -top-1 -right-1 w-3 h-3 rounded-full border-2 border-white ${
+                  unavailable
+                    ? 'bg-error/70'
+                    : existing || isEditingThis || table.status === 'occupied'
+                      ? 'bg-warning'
+                      : 'bg-success'
+                }`}
+              />
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Food-delivery services configured by the manager/admin */}
+      {activeChannels.length > 0 && (
+        <div className="flex flex-wrap gap-2">
+          {activeChannels.map(channel => {
+            const isSelected = selectedDeliveryChannel?.id === channel.id;
+            const disabled = channel.active === false;
+            const color = channel.color || '#6D4C41';
+            return (
+              <button
+                key={channel.id}
+                type="button"
+                disabled={disabled}
+                onClick={() => onSelectDelivery(channel)}
+                className={`flex items-center gap-1.5 px-3 py-2 rounded-xl border-2 text-sm font-semibold transition-all ${
+                  disabled ? 'opacity-40 cursor-not-allowed border-latte/20 bg-latte/10' : 'btn-press'
+                }`}
+                style={
+                  isSelected
+                    ? { borderColor: color, backgroundColor: color, color: 'white' }
+                    : { borderColor: `${color}55`, backgroundColor: `${color}14`, color: '#3E2B22' }
+                }
+                title={disabled ? `${channel.name} — disabled` : `Delivery via ${channel.name}`}
+              >
+                <span aria-hidden="true">{channel.emoji || '🛵'}</span>
+                {channel.name}
+              </button>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

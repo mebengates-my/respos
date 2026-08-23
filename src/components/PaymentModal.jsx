@@ -351,13 +351,16 @@ function CashPaymentStep({
           <input
             ref={inputRef}
             type="text"
-            inputMode="numeric"
-            value={customAmount ? parseInt(customAmount).toLocaleString() : ''}
-            onChange={(e) => onCustomInput(e.target.value.replace(/,/g, ''))}
-            placeholder="Enter custom amount..."
+            inputMode="decimal"
+            value={customAmount ? (parseInt(customAmount, 10) / 100).toFixed(2) : ''}
+            onChange={(e) => onCustomInput(e.target.value.replace(/[^0-9]/g, ''))}
+            placeholder="0.00"
             className="w-full p-4 bg-cream border-2 border-latte/30 rounded-xl text-center text-2xl font-mono font-bold focus:outline-none focus:border-accent"
           />
           <Calculator className="absolute right-4 top-1/2 -translate-y-1/2 w-5 h-5 text-medium-roast" />
+          <p className="text-center text-xs text-medium-roast mt-1.5">
+            Type the amount in RM — e.g. press 2 5 0 0 for RM 25.00
+          </p>
         </div>
         
         {/* Change calculation */}

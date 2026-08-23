@@ -175,6 +175,32 @@ export const translations = {
     occupied: 'Occupied',
     reserved: 'Reserved',
     cleaning: 'Cleaning',
+    walkIn: 'Walk-in',
+    active: 'Active',
+    inactive: 'Inactive',
+
+    // Food-delivery services
+    deliveryServices: 'Delivery Services',
+    addDeliveryService: 'Add Delivery Service',
+    editDeliveryService: 'Edit Delivery Service',
+    deleteDeliveryService: 'Delete delivery service',
+    deliveryServicesHint: 'Food-delivery companies configured here appear as tappable icons in the POS order panel, next to walk-in and the tables. Turn a service off to hide it without deleting it.',
+    noDeliveryServices: 'No delivery services yet. Add GrabFood, foodpanda, Shopee Food or any courier this store uses.',
+    deliveryServiceName: 'Service name',
+    deliveryServiceIcon: 'Icon',
+    deliveryServiceColor: 'Colour',
+    deliveryServiceActive: 'Active',
+    deliveryServiceActiveHint: 'Inactive services stay here but disappear from the POS',
+
+    // Item customization (modifier groups)
+    customizable: 'Customizable',
+    customizationOptions: 'Customization Options',
+    customizationOptionsHint: 'When on, tapping this item in the POS first asks for options; when off it is added straight to the order.',
+    noCustomizationGroups: 'No option groups yet — add one like "Spice Level" or "Size".',
+    groupNamePlaceholder: 'Group name (e.g. Spice Level)',
+    optionNamePlaceholder: 'Option (e.g. Extra Spicy)',
+    addOption: 'Add option',
+    addGroup: 'Add option group',
     
     // Status
     status: 'Status',
@@ -436,7 +462,33 @@ export const translations = {
     occupied: 'দখলিত',
     reserved: 'সংরক্ষিত',
     cleaning: 'পরিষ্কার করা হচ্ছে',
-    
+    walkIn: 'ওয়াক-ইন',
+    active: 'চালু',
+    inactive: 'বন্ধ',
+
+    // Food-delivery services
+    deliveryServices: 'ডেলিভারি সার্ভিস',
+    addDeliveryService: 'ডেলিভারি সার্ভিস যোগ করুন',
+    editDeliveryService: 'ডেলিভারি সার্ভিস সম্পাদনা',
+    deleteDeliveryService: 'ডেলিভারি সার্ভিস মুছুন',
+    deliveryServicesHint: 'এখানে কনফিগার করা ফুড-ডেলিভারি কোম্পানিগুলো ওয়াক-ইন ও টেবিলের পাশে আইকন হিসেবে POS অর্ডার প্যানেলে দেখাবে। না মুছে লুকাতে সার্ভিসটি বন্ধ করুন।',
+    noDeliveryServices: 'এখনও কোনো ডেলিভারি সার্ভিস নেই। GrabFood, foodpanda, Shopee Food বা অন্য কুরিয়ার যোগ করুন।',
+    deliveryServiceName: 'সার্ভিসের নাম',
+    deliveryServiceIcon: 'আইকন',
+    deliveryServiceColor: 'রং',
+    deliveryServiceActive: 'চালু',
+    deliveryServiceActiveHint: 'বন্ধ সার্ভিস এখানে থাকবে কিন্তু POS থেকে সরে যাবে',
+
+    // Item customization (modifier groups)
+    customizable: 'কাস্টমাইজেবল',
+    customizationOptions: 'কাস্টমাইজেশন অপশন',
+    customizationOptionsHint: 'চালু থাকলে POS-এ আইটেমে ট্যাপ করলে আগে অপশন জিজ্ঞেস করবে; বন্ধ থাকলে সরাসরি অর্ডারে যোগ হবে।',
+    noCustomizationGroups: 'এখনও কোনো অপশন গ্রুপ নেই — "স্পাইসি লেভেল" বা "সাইজ" এর মতো একটি যোগ করুন।',
+    groupNamePlaceholder: 'গ্রুপের নাম (যেমন স্পাইসি লেভেল)',
+    optionNamePlaceholder: 'অপশন (যেমন এক্সট্রা স্পাইসি)',
+    addOption: 'অপশন যোগ করুন',
+    addGroup: 'অপশন গ্রুপ যোগ করুন',
+
     // Status
     status: 'স্ট্যাটাস',
     open: 'খোলা',

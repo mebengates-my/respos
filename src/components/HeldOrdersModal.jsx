@@ -8,7 +8,8 @@ export default function HeldOrdersModal({ open, onClose }) {
   const { state, actions } = useApp();
   const { heldOrders, tables } = state;
 
-  const tableLabel = (tableId) => {
+  const tableLabel = (tableId, order) => {
+    if (order?.deliveryChannel?.name) return order.deliveryChannel.name;
     if (tableId === 'COUNTER') return 'Counter';
     const table = tables.find(t => t.id === tableId);
     return table ? `Table ${table.number}` : tableId;
@@ -77,7 +78,7 @@ export default function HeldOrdersModal({ open, onClose }) {
                         <div className="flex items-center gap-2">
                           <Coffee className="w-4 h-4 text-warning" />
                           <span className="font-medium text-dark-roast">
-                            {tableLabel(order.tableId)}
+                            {tableLabel(order.tableId, order)}
                           </span>
                         </div>
                         <span className="text-xs text-medium-roast">

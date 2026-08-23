@@ -140,6 +140,45 @@ export const menuItems = [
   { id: 'dr-8', categoryId: 'drinks', name: 'Green Coconut', price: 800, description: 'Fresh tender coconut water', modifiers: [], available: true },
 ];
 
+// Default food-delivery services offered on the POS order screen. Managers and
+// admins can add, rename, recolour or remove these (Admin → Delivery Services);
+// whatever is configured here shows up as a tappable icon next to walk-in and
+// the dining tables. Like tables, the list is device-local.
+export const defaultDeliveryChannels = [
+  { id: 'dl-grab', name: 'GrabFood', emoji: '🛵', color: '#00B14F', active: true },
+  { id: 'dl-panda', name: 'foodpanda', emoji: '🐼', color: '#D70F64', active: true },
+  { id: 'dl-shopee', name: 'Shopee Food', emoji: '🛍️', color: '#EE4D2D', active: true },
+];
+
+// Resolve the customization (modifier) groups of a menu item into one shape:
+//   [{ id, name, options: [{ id, name, price }] }]
+// Items carry either the editable `modifierGroups` written by the admin panel,
+// or (legacy seed data) a list of group keys into the shared dictionary above.
+// The POS open-item modal and the "Customizable" badge both use this, so an
+// item only ever offers customization when a manager configured it.
+export function resolveModifierGroups(item) {
+  if (!item) return [];
+  if (Array.isArray(item.modifierGroups) && item.modifierGroups.length > 0) {
+    return item.modifierGroups
+      .filter(group => group && group.name)
+      .map(group => ({
+        id: group.id,
+        name: group.name,
+        options: (group.options || []).filter(option => option && option.name),
+      }));
+  }
+  if (Array.isArray(item.modifiers) && item.modifiers.length > 0) {
+    return item.modifiers
+      .map(modId => ({
+        id: modId,
+        name: modId.charAt(0).toUpperCase() + modId.slice(1).replace(/-/g, ' '),
+        options: modifiers[modId] || [],
+      }))
+      .filter(group => group.options.length > 0);
+  }
+  return [];
+}
+
 // Tax rate (6% SST in Malaysia)
 export const TAX_RATE = 0.06;
 
