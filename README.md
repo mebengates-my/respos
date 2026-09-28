@@ -53,7 +53,7 @@ is scaffolded and the first online features are built:
 
 - **Multi-tenant schema + RLS** (`supabase/schema.sql`) — stores, profiles,
   store_members, menu, tables, orders and expenses, all scoped by `store_id`,
-  with `register_store()` for owner sign-up and realtime on orders/tables.
+  plus approval-gated store applications and realtime on orders/tables.
   Submitted server orders sync through Supabase to management devices; order
   visibility and edit permissions follow the shared store setting.
 - **Cloud client** (`src/services/cloud.js`) — a `cloudAuth` facade over
@@ -61,12 +61,14 @@ is scaffolded and the first online features are built:
   `VITE_SUPABASE_ANON_KEY` are set it talks to your real Supabase project;
   without them it transparently falls back to an **in-browser mock**
   (`src/services/cloudMock.js`) so the flow is fully demoable offline.
-- **Owner onboarding** — the Login screen now has a **Store login** button
-  that opens owner sign-up/sign-in, store creation, and store selection. A
-  cloud session persists across refresh (key `cafe-pos-session-cloud`) and
-  re-validates against the backend on load. Signing in as an owner puts you
-  in the Admin/Manager panel; a server membership lands in the POS.
-- **Per-store login links (…/mycafe)** — creating a store generates a URL
+- **Approval-gated owner onboarding** — the Login screen has a **Store login**
+  button for owner sign-up/sign-in. A new owner must pass Cloudflare Turnstile
+  and submits a pending application; this creates **no store, membership, or
+  public link**. A platform super user reviews it in a dedicated approval
+  console. Only approval atomically creates the store and owner-admin
+  membership. Rejected applicants can see the review note and reapply.
+  Supabase email confirmation is also handled when enabled.
+- **Per-store login links (…/mycafe)** — approval generates a URL
   slug (`My Café` → `/my-cafe`). Staff open that link, tap their name and
   enter their 4-digit PIN — no emails, and never the owner's password.
   Behind the scenes: public anon RPCs `get_store_by_slug` / `store_roster`
@@ -82,10 +84,10 @@ is scaffolded and the first online features are built:
 
 To go live: run `supabase/schema.sql` in your Supabase SQL Editor (and
 **re-run the whole file after app updates** — it is idempotent and only
-adds what is missing), set `VITE_SUPABASE_URL` + `VITE_SUPABASE_ANON_KEY`
-(client) and, for the staff route, `SUPABASE_URL` +
-`SUPABASE_SERVICE_ROLE_KEY` (server) as Vercel env vars. See
-`docs/SAAS.md` for the full guide.
+adds what is missing), then configure Supabase, Cloudflare Turnstile, and the
+server-only `SUPER_ADMIN_EMAILS` allowlist. The required variables are listed
+in `.env.example`; do not expose the service-role, Turnstile secret, or proof
+secret as `VITE_*` values. See `docs/SAAS.md` for the full guide.
 
 ## Important production requirement: shared users and cloud sync
 

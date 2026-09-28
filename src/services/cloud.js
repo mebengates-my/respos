@@ -4,7 +4,6 @@ import {
   mockSignUp,
   mockSignIn,
   mockSignOut,
-  mockRegisterStore,
   mockListMyStores,
   mockListStoreMembers,
   mockUpdateStoreMember,
@@ -14,6 +13,12 @@ import {
   mockGetStoreRoster,
   mockPinLogin,
   mockDeleteStore,
+  mockPrepareStoreApplication,
+  mockSubmitStoreApplication,
+  mockGetMyStoreApplication,
+  mockIsPlatformAdmin,
+  mockListStoreApplications,
+  mockReviewStoreApplication,
 } from './cloudMock';
 
 // Cloud mode is enabled only when Supabase credentials are provided via env.
@@ -81,7 +86,12 @@ export const cloudAuth = {
   },
 
   async signUp({ email, password, displayName }) {
-    if (!isCloudEnabled) return mockSignUp({ email, password, displayName });
+    if (!isCloudEnabled) {
+      const result = await mockSignUp({ email, password, displayName });
+      return result.error
+        ? result
+        : { data: { ...result.data, requiresEmailConfirmation: false }, error: null };
+    }
     const { data, error } = await supabase.auth.signUp({
       email,
       password,
@@ -90,7 +100,16 @@ export const cloudAuth = {
     if (error || !data?.user) {
       return { data: null, error: error || { message: 'Sign-up failed' } };
     }
-    return { data: { user: toAppUser(data.user) }, error: null };
+    return {
+      data: {
+        user: toAppUser(data.user),
+        // When Supabase email confirmation is enabled, signUp returns a user
+        // but no session. The owner verifies their inbox, then signs in and
+        // submits a fresh CAPTCHA-protected application.
+        requiresEmailConfirmation: !data.session,
+      },
+      error: null,
+    };
   },
 
   async signIn({ email, password }) {
@@ -111,20 +130,62 @@ export const cloudAuth = {
     return { data: null, error };
   },
 
-  // Owner sign-up step 2: call the SQL `register_store()` RPC, then return the
-  // new store. The RPC returns { id, slug } — the slug is the store's public
-  // link (…/mycafe) that staff use to sign in with their PIN. The mock does
-  // the equivalent in localStorage.
-  async registerStore({ storeName, displayName }) {
+  // ---- CAPTCHA + platform approval gate ----
+  // The CAPTCHA is verified before Auth sign-up. The API returns a short-lived
+  // signed proof bound to these exact form values; after sign-up the proof is
+  // exchanged for a pending application. No store exists until a platform
+  // super user approves it.
+  async prepareStoreApplication({ email, storeName, displayName, captchaToken }) {
     if (!isCloudEnabled) {
-      return mockRegisterStore({ storeName, displayName });
+      return mockPrepareStoreApplication({ email, storeName, displayName, captchaToken });
     }
-    const { data, error } = await supabase.rpc('register_store', {
-      p_store_name: storeName,
-      p_display_name: displayName || '',
+    const result = await callApplicationsApi(
+      { action: 'verifyCaptcha', email, storeName, displayName, captchaToken },
+      false
+    );
+    return result.error
+      ? result
+      : { data: { captchaProof: result.data.proof }, error: null };
+  },
+
+  async submitStoreApplication({ email, storeName, displayName, captchaProof }) {
+    if (!isCloudEnabled) {
+      return mockSubmitStoreApplication({ email, storeName, displayName, captchaProof });
+    }
+    return callApplicationsApi({
+      action: 'submit',
+      email,
+      storeName,
+      displayName,
+      captchaProof,
     });
-    if (error) return { data: null, error };
-    return { data: { store: { id: data.id, name: storeName, slug: data.slug } }, error: null };
+  },
+
+  async getMyStoreApplication() {
+    if (!isCloudEnabled) return mockGetMyStoreApplication();
+    return callApplicationsApi({ action: 'status' });
+  },
+
+  async isPlatformAdmin() {
+    if (!isCloudEnabled) return mockIsPlatformAdmin();
+    return callApplicationsApi({ action: 'access' });
+  },
+
+  async listStoreApplications() {
+    if (!isCloudEnabled) return mockListStoreApplications();
+    return callApplicationsApi({ action: 'list' });
+  },
+
+  async reviewStoreApplication({ applicationId, decision, reviewNote = '' }) {
+    if (!isCloudEnabled) {
+      return mockReviewStoreApplication({ applicationId, decision, reviewNote });
+    }
+    return callApplicationsApi({
+      action: 'review',
+      applicationId,
+      decision,
+      reviewNote,
+    });
   },
 
   // Stores the signed-in user is an active member of, with membership role.
@@ -812,6 +873,35 @@ export const cloudExpenses = {
     return () => { supabase.removeChannel(channel); };
   },
 };
+
+// Store applications all pass through a server route: CAPTCHA secrets and the
+// Supabase service-role key never enter the browser bundle.
+async function callApplicationsApi(body, authenticated = true) {
+  const token = authenticated ? await cloudAuth.getAccessToken() : null;
+  if (authenticated && !token) {
+    return { data: null, error: { message: 'Please sign in again' } };
+  }
+  try {
+    const res = await fetch('/api/store-applications', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify(body),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      return {
+        data: json.application ? { application: json.application } : null,
+        error: { message: json.error || 'Request failed' },
+      };
+    }
+    return { data: json, error: null };
+  } catch (error) {
+    return { data: null, error: { message: error?.message || 'Network error' } };
+  }
+}
 
 // POST to the serverless staff-provisioning route. On Vercel `/api/*` is
 // handled natively; in local dev the Vite dev server serves the same route
