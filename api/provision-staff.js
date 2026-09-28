@@ -18,9 +18,6 @@
 
 import { createClient } from '@supabase/supabase-js';
 
-const SUPABASE_URL = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
-const SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
-
 const VALID_ROLES = new Set(['admin', 'manager', 'server']);
 
 // Generate a stable-enough, human-identifiable email like
@@ -43,7 +40,11 @@ export default async function handler(req, res) {
     return;
   }
 
-  if (!SUPABASE_URL || !SERVICE_ROLE_KEY) {
+  // Read inside the request so Vite's local middleware can inject .env.local
+  // values without ever exposing them to the browser bundle.
+  const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!supabaseUrl || !serviceRoleKey) {
     console.error('Missing SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY');
     res.status(500).json({ error: 'Server not configured (missing service-role env vars)' });
     return;
@@ -65,7 +66,7 @@ export default async function handler(req, res) {
   }
 
   // Service-role client bypasses RLS — keep it out of the browser.
-  const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
+  const admin = createClient(supabaseUrl, serviceRoleKey, {
     auth: { autoRefreshToken: false, persistSession: false },
   });
 
@@ -210,7 +211,7 @@ export default async function handler(req, res) {
 
   const profileId = authUser.user.id;
 
-  // Ensure a profile row exists (idempotent with register_store's profile insert).
+  // Ensure a profile row exists (idempotent with the approval flow's insert).
   await admin.from('profiles').upsert(
     { id: profileId, display_name: String(name).trim(), email },
     { onConflict: 'id' }

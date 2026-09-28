@@ -48,6 +48,41 @@ create table if not exists public.profiles (
   created_at timestamptz not null default now()
 );
 
+-- ---------- Platform access + store applications ----------
+-- A platform admin is the SaaS operator (not a store's Admin role). Platform
+-- admins review applications through the server-only API before a store row or
+-- owner membership is created. Add the creator's auth user once during setup;
+-- see docs/SAAS.md.
+create table if not exists public.platform_admins (
+  profile_id uuid primary key references auth.users(id) on delete cascade,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists public.store_applications (
+  id uuid primary key default gen_random_uuid(),
+  applicant_id uuid not null references auth.users(id) on delete cascade,
+  owner_email text not null,
+  owner_display_name text not null,
+  store_name text not null,
+  status text not null default 'pending'
+    check (status in ('pending', 'approved', 'rejected')),
+  captcha_proof_hash text not null unique,
+  review_note text,
+  reviewed_by uuid references auth.users(id) on delete set null,
+  reviewed_at timestamptz,
+  approved_store_id uuid references public.stores(id) on delete set null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+-- One person can reapply after a rejection, but cannot create a queue of
+-- duplicate pending requests.
+create unique index if not exists idx_one_pending_application_per_user
+  on public.store_applications (applicant_id)
+  where status = 'pending';
+create index if not exists idx_store_applications_status_created
+  on public.store_applications (status, created_at desc);
+
 -- ---------- Memberships: who belongs to which store, with what role ----------
 -- Staff (manager/server) get real auth users with a generated email and the
 -- 4-digit PIN as password, so RLS works for everyone. Provisioning is done by
@@ -308,43 +343,133 @@ begin
 end $$;
 
 -- ============================================================
--- Sign-up flow: creates profile + store + admin membership.
--- Called by the app right after Supabase Auth sign-up.
--- Returns { id, slug } so the app can immediately show the owner
--- their staff sign-in link (…/<slug>).
+-- Approval-gated store creation
+--
+-- New owners submit a CAPTCHA-protected application through
+-- /api/store-applications. No store or membership exists yet. Only the
+-- service-role API can call review_store_application(), and that API first
+-- verifies that the signed-in reviewer is a platform admin.
 -- ============================================================
-drop function if exists public.register_store(text, text);
 
+-- Disable the old direct-creation RPC. Keeping a rejecting function gives old
+-- clients a clear error while closing the bypass that would otherwise let any
+-- authenticated account create a store without review.
+drop function if exists public.register_store(text, text);
 create or replace function public.register_store(p_store_name text, p_display_name text)
 returns jsonb
 language plpgsql security definer set search_path = public as $$
+begin
+  raise exception 'Store creation now requires platform approval';
+end;
+$$;
+revoke all on function public.register_store(text, text) from public, anon, authenticated;
+
+-- Atomic approve/reject operation. The public cannot execute it: the Vercel
+-- API owns the service-role key, authenticates the caller, checks
+-- platform_admins/SUPER_ADMIN_EMAILS, then supplies that caller as reviewer.
+create or replace function public.review_store_application(
+  p_application_id uuid,
+  p_decision text,
+  p_reviewer_id uuid,
+  p_review_note text default null
+)
+returns jsonb
+language plpgsql security definer set search_path = public as $$
 declare
+  application public.store_applications%rowtype;
   new_store_id uuid;
   new_slug text;
+  reviewer_is_admin boolean;
+  request_role text;
 begin
-  if auth.uid() is null then
-    raise exception 'not authenticated';
+  request_role := coalesce(
+    auth.role(),
+    current_setting('request.jwt.claim.role', true),
+    ''
+  );
+  if request_role <> 'service_role'
+     and current_user not in ('postgres', 'supabase_admin', 'service_role') then
+    raise exception 'This function is server-only';
   end if;
 
+  if p_decision not in ('approved', 'rejected') then
+    raise exception 'Decision must be approved or rejected';
+  end if;
+
+  select exists (
+    select 1 from public.platform_admins where profile_id = p_reviewer_id
+  ) into reviewer_is_admin;
+  if not reviewer_is_admin then
+    raise exception 'Reviewer is not a platform admin';
+  end if;
+
+  select * into application
+  from public.store_applications
+  where id = p_application_id
+  for update;
+
+  if not found then
+    raise exception 'Application not found';
+  end if;
+  if application.status <> 'pending' then
+    raise exception 'Application has already been reviewed';
+  end if;
+
+  if p_decision = 'rejected' then
+    update public.store_applications
+    set status = 'rejected',
+        review_note = nullif(trim(coalesce(p_review_note, '')), ''),
+        reviewed_by = p_reviewer_id,
+        reviewed_at = now(),
+        updated_at = now()
+    where id = application.id;
+
+    return jsonb_build_object(
+      'id', application.id,
+      'status', 'rejected',
+      'reviewNote', nullif(trim(coalesce(p_review_note, '')), '')
+    );
+  end if;
+
+  -- Create the tenant only at approval time. Until this transaction commits,
+  -- its public link does not resolve and the applicant has no POS access.
   insert into public.profiles (id, display_name, email)
-  values (auth.uid(), coalesce(p_display_name, ''),
-          (select email from auth.users where id = auth.uid()))
-  on conflict (id) do update set display_name = excluded.display_name;
+  values (application.applicant_id, application.owner_display_name, application.owner_email)
+  on conflict (id) do update
+    set display_name = excluded.display_name,
+        email = excluded.email;
 
-  new_slug := public.unique_store_slug(p_store_name);
-
+  new_slug := public.unique_store_slug(application.store_name);
   insert into public.stores (name, slug, created_by)
-  values (p_store_name, new_slug, auth.uid())
+  values (application.store_name, new_slug, application.applicant_id)
   returning id into new_store_id;
 
   insert into public.store_members (store_id, profile_id, role, display_name)
-  values (new_store_id, auth.uid(), 'admin', coalesce(p_display_name, ''));
+  values (new_store_id, application.applicant_id, 'admin', application.owner_display_name);
 
-  return jsonb_build_object('id', new_store_id, 'slug', new_slug);
+  update public.store_applications
+  set status = 'approved',
+      review_note = nullif(trim(coalesce(p_review_note, '')), ''),
+      reviewed_by = p_reviewer_id,
+      reviewed_at = now(),
+      approved_store_id = new_store_id,
+      updated_at = now()
+  where id = application.id;
+
+  return jsonb_build_object(
+    'id', application.id,
+    'status', 'approved',
+    'storeId', new_store_id,
+    'slug', new_slug,
+    'reviewNote', nullif(trim(coalesce(p_review_note, '')), '')
+  );
 end;
 $$;
 
-grant execute on function public.register_store(text, text) to authenticated;
+revoke all on function public.review_store_application(uuid, text, uuid, text)
+  from public, anon, authenticated;
+grant execute on function public.review_store_application(uuid, text, uuid, text)
+  to service_role;
 
 -- ============================================================
 -- Public (anon) store + PIN login RPCs.
@@ -527,6 +652,8 @@ grant execute on function public.delete_store(uuid, text) to authenticated, serv
 -- ============================================================
 alter table public.stores enable row level security;
 alter table public.profiles enable row level security;
+alter table public.platform_admins enable row level security;
+alter table public.store_applications enable row level security;
 alter table public.store_members enable row level security;
 alter table public.menu_categories enable row level security;
 alter table public.menu_items enable row level security;
@@ -534,6 +661,12 @@ alter table public.dining_tables enable row level security;
 alter table public.orders enable row level security;
 alter table public.expense_categories enable row level security;
 alter table public.expenses enable row level security;
+
+-- Applications and the platform-admin allowlist are server-only. No browser
+-- table policy is created for either table; the API returns only the safe,
+-- caller-appropriate fields after authenticating the access token.
+revoke all on table public.platform_admins from anon, authenticated;
+revoke all on table public.store_applications from anon, authenticated;
 
 -- Stores: members read; Admins update the full store row. Managers change only
 -- the server-order visibility key through set_server_order_visibility().
@@ -708,9 +841,9 @@ begin
 end $$;
 
 -- ============================================================
--- Demo data is intentionally NOT included: each SaaS customer
--- creates their own store via register_store() and builds their
--- own menu, tables and staff.
+-- Demo data is intentionally NOT included: an approved application creates
+-- each tenant through review_store_application(); its owner then builds the
+-- menu, tables and staff.
 -- ============================================================
 
 -- Make PostgREST pick up new/changed functions (e.g. set_server_price_access)

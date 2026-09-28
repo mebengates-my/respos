@@ -2,8 +2,8 @@
 
 This app becomes a SaaS by keeping the **frontend on Vercel** (deployed from
 GitHub) and moving all data into **Supabase** (hosted PostgreSQL). Each
-restaurant that signs up gets its own **store**, and Postgres **Row Level
-Security (RLS)** makes it impossible for one store to read another's data.
+approved restaurant applicant gets its own **store**, and Postgres **Row Level
+Security (RLS)** prevents one store from reading another's data.
 
 ```
 Vercel (React app, from GitHub)          Supabase
@@ -26,47 +26,69 @@ Vercel (React app, from GitHub)          Supabase
 
 1. **Create a Supabase project** (free tier) at https://supabase.com.
 2. **Run the schema:** Dashboard → SQL Editor → paste the whole content of
-   `supabase/schema.sql` → Run. This creates all tables, RLS policies,
-   realtime publication and the `register_store()` sign-up function.
+   `supabase/schema.sql` → Run. This creates the tenant tables/RLS plus
+   `store_applications`, `platform_admins`, and the server-only atomic review
+   function. The old public `register_store()` path is explicitly revoked.
    The file is idempotent — **re-run the whole file after every app update
-   that changes it**, so newer settings functions (e.g.
-   `set_server_price_access`) reach your database. Without that you may see
-   "could not find the function … in the schema cache" when saving settings.
-3. **Copy credentials:** Dashboard → Project Settings → API → *Project URL*
-   and *anon public key*.
-4. **Local dev:** `cp .env.example .env.local`, paste the two values, restart
-   `npm run dev`.
-5. **Deploy:** push to GitHub → import the repo in https://vercel.com →
-   add the same two `VITE_*` env vars under Project → Settings →
-   Environment Variables → Deploy. Also add `SUPABASE_URL` and
-   `SUPABASE_SERVICE_ROLE_KEY` (server-only) for the staff-provisioning
-   route (`api/provision-staff.js`).
+   that changes it**.
+3. **Copy Supabase credentials:** Dashboard → Project Settings → API →
+   *Project URL*, *anon public key*, and the server-only *service_role* key.
+4. **Configure Cloudflare Turnstile:** create a widget for your production
+   hostname (and localhost while developing). Put the public site key in
+   `VITE_TURNSTILE_SITE_KEY` and the secret in `TURNSTILE_SECRET_KEY`.
+   Cloud mode fails closed: a missing public key disables submission, and a
+   missing server secret makes the API reject the challenge.
+5. **Create the platform super user:** create/confirm a normal Supabase Auth
+   user for yourself, then set server-only `SUPER_ADMIN_EMAILS` to that email
+   (comma-separated if you want a backup operator). On first sign-in the API
+   records the user id in `public.platform_admins`. You can alternatively
+   seed it explicitly after the Auth user exists:
 
-## Sign-up & staff flow (how tenancy works)
+   ```sql
+   insert into public.platform_admins (profile_id)
+   select id from auth.users where lower(email) = lower('creator@example.com')
+   on conflict do nothing;
+   ```
 
-1. Owner signs up with email/password (Supabase Auth) → app calls
-   `register_store('My Café', 'Owner Name')` → creates `stores` (with a URL
-   **slug**) + `store_members` (role `admin`) rows. The app then shows the
-   owner their staff sign-in link, e.g. `respos-five.vercel.app/my-cafe`.
-2. Admin creates managers/servers. Staff accounts are Supabase Auth users
-   with a generated email (e.g. `mycafe-server-ab12@staff.internal`) and the
-   4-digit PIN as password, so RLS applies to them too. Creating auth users
-   requires the **service role key**, which must only ever live in a
-   **server-side Vercel API route** (never in the browser).
-3. Staff never touch an email. They open the store link
-   (`respos-five.vercel.app/mycafe`), tap their name on the roster and enter
-   their 4-digit PIN:
-   - `get_store_by_slug(slug)` / `store_roster(slug)` — public anon RPCs that
-     render the store's PIN screen (roster shows only members that have a PIN;
-     the owner is not listed).
-   - `verify_pin(slug, profile_id, pin)` — verifies the PIN server-side with a
-     brute-force lockout (5 wrong tries → 5-minute lock) and returns the
-     member's generated email. The client then calls
-     `supabase.auth.signInWithPassword(email, pin)` to get a real,
-     RLS-scoped session. The owner's email/password is never shared with staff.
-4. `vercel.json` rewrites every non-file path (e.g. `/mycafe`) to the SPA, so
-   store links work directly on Vercel. After logout the device returns to
-   the same store's PIN screen, ready for the next staff member.
+   To revoke an operator, remove the email from `SUPER_ADMIN_EMAILS` **and**
+   delete its row from `platform_admins`.
+
+6. **Set all environment variables:** copy `.env.example` to `.env.local` for
+   local development and add the same values in Vercel. Only
+   `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, and
+   `VITE_TURNSTILE_SITE_KEY` are browser-visible. Keep
+   `SUPABASE_SERVICE_ROLE_KEY`, `TURNSTILE_SECRET_KEY`,
+   `CAPTCHA_PROOF_SECRET`, and `SUPER_ADMIN_EMAILS` server-only.
+7. **Deploy/restart.** The store-application and staff-provisioning APIs are
+   Vercel functions; Vite serves the same handlers in local development.
+
+## Sign-up, approval & staff flow
+
+1. The owner fills in name, store, email and password and completes Cloudflare
+   Turnstile. `/api/store-applications` validates the CAPTCHA **before** Auth
+   sign-up and returns a signed, 10-minute proof bound to those exact fields.
+2. After Auth sign-up, that proof is exchanged for a `pending`
+   `store_applications` row. At this point there is deliberately **no** store,
+   owner membership, slug, or usable POS account. If Supabase email
+   confirmation is enabled, the owner confirms/signs in and completes a fresh
+   CAPTCHA before submitting.
+3. The creator signs in with an email in `SUPER_ADMIN_EMAILS` (or an id already
+   in `platform_admins`) and gets the **Platform approvals** console. Approve
+   calls the server-only `review_store_application()` transaction, which
+   creates `stores` + the owner's `admin` membership and marks the request
+   approved together. Reject creates nothing and can include a note.
+4. Once approved, the owner refreshes/signs in and enters the store. Only now
+   does its public staff link (for example `respos-five.vercel.app/my-cafe`)
+   resolve.
+5. The store Admin creates managers/servers. Staff accounts are Supabase Auth
+   users with a generated email and the 4-digit PIN as password, so RLS
+   applies to them too. The service-role key remains server-side in
+   `api/provision-staff.js`.
+6. Staff open the approved store link, tap their name and enter their PIN.
+   `verify_pin` applies a 5-attempt / 5-minute lockout before the client gets a
+   real RLS-scoped Supabase session.
+7. `vercel.json` rewrites non-file paths to the SPA, so direct store links work
+   on Vercel. Logout returns a staff device to that store's PIN screen.
 
 Slug rules: lowercased store name with non-alphanumerics collapsed to `-`
 ("My Café" → `my-cafe`, "mycafe" → `mycafe`); collisions get a `-2`, `-3`…
@@ -129,10 +151,12 @@ Orders board updates live from every tablet/phone in the store.
 
 - [x] Multi-tenant schema + RLS (`supabase/schema.sql`)
 - [x] Cloud client scaffold (`src/services/cloud.js`, env-flagged)
-- [x] Owner sign-up / sign-in / store-selection screens
-      (`src/components/Onboarding.jsx` — built against an in-browser mock
-      `src/services/cloudMock.js`, swapped for real Supabase automatically
-      once the env vars are present)
+- [x] CAPTCHA-protected owner applications + platform super-user approval
+      (`api/store-applications.js`, `src/components/Onboarding.jsx`, and
+      `src/components/SuperAdminPanel.jsx`). A store is created only inside the
+      atomic approval transaction.
+- [x] Owner sign-in / approved-store selection screens, with an in-browser mock
+      swapped for Supabase automatically once env vars are present.
 - [x] Vercel API route for staff provisioning (`api/provision-staff.js` —
       service key, creates auth users + PINs + `store_members` rows; also
       supports `update` and `remove`, and requires the caller's Supabase
@@ -152,14 +176,18 @@ Until the owner's Supabase project is provided, everything above the data
 layer runs against an **in-browser mock** (`src/services/cloudMock.js`):
 
 1. `npm run dev`
-2. On the Login screen tap **Store login**.
-3. Create a store (name + your name + email + password). You become the
-   store's **admin** and land in the Admin Panel.
-4. A cloud session (`cafe-pos-session-cloud`) persists across refresh and is
-   re-validated on load, exactly like the real backend.
-5. To test staff sign-in, open **Admin Panel → User Management** and add a
-   manager/server (this provisions a real mock user with the 4-digit PIN),
-   then sign in with that generated email + PIN via **Store login**.
+2. On the Login screen tap **Store login**, create an applicant account, tick
+   the demo human check, and submit. The status stays **awaiting approval** and
+   no store link exists.
+3. Sign out. Create the mock operator account with
+   `admin@respos.local` (or `VITE_MOCK_SUPER_ADMIN_EMAIL`), then sign in. The
+   **Platform approvals** console appears; approve the request.
+4. Sign back in as the applicant. They now enter the Admin Panel and get the
+   approved store link.
+5. For an automated dry run of the same lifecycle, run
+   `npm run test:approval`.
+6. To test staff sign-in, open **Admin Panel → User Management**, add a
+   manager/server, then use the generated store link and PIN.
 
 Nothing about the UI changes when the real backend arrives — set
 `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY` in `.env.local` and the mock is
@@ -199,8 +227,17 @@ only).
 ## Security notes
 
 - The **anon key is public by design** — safety comes from RLS, which is why
-  every table is scoped by `store_id`.
-- The **service role key** bypasses RLS; keep it only in server-side Vercel
-  functions.
-- PINs are short by nature; Supabase rate-limits sign-in attempts, which is
-  the main protection for staff PIN accounts.
+  every tenant table is scoped by `store_id`.
+- `store_applications` and `platform_admins` have RLS enabled and no browser
+  policies. Only the service-role API reads/writes them. The approval SQL
+  function is granted only to `service_role` and independently requires the
+  supplied reviewer to exist in `platform_admins`.
+- Turnstile is verified server-side before Auth sign-up. Its short-lived proof
+  is HMAC-signed, bound to email/name/store, single-use at the database layer,
+  and never contains a password.
+- The **service role key**, Turnstile secret and CAPTCHA proof secret bypass or
+  protect server controls; keep them only in server-side Vercel variables.
+- Protect the super-user email with a strong unique password, email
+  confirmation and MFA in Supabase. Keep a second recoverable operator.
+- PINs are short by nature; `verify_pin` adds a five-attempt/five-minute
+  lockout in addition to Supabase's own rate limiting.

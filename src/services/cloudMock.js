@@ -51,14 +51,21 @@ function uniqueStoreSlug(db, name) {
 
 
 function emptyDb() {
-  return { users: [], profiles: [], stores: [], memberships: [] };
+  return { users: [], profiles: [], stores: [], memberships: [], applications: [] };
 }
 
 function loadDb() {
   // Guard against a corrupt/null stored value (e.g. after mockReset writes
   // null, which round-trips as the string "null" and parses back to null).
-  const db = loadFromStorage(MOCK_STORAGE_KEY, emptyDb());
-  return db && typeof db === 'object' ? db : emptyDb();
+  const stored = loadFromStorage(MOCK_STORAGE_KEY, emptyDb());
+  const db = stored && typeof stored === 'object' ? stored : emptyDb();
+  // Migrate older mock data without asking users to clear localStorage.
+  db.users = Array.isArray(db.users) ? db.users : [];
+  db.profiles = Array.isArray(db.profiles) ? db.profiles : [];
+  db.stores = Array.isArray(db.stores) ? db.stores : [];
+  db.memberships = Array.isArray(db.memberships) ? db.memberships : [];
+  db.applications = Array.isArray(db.applications) ? db.applications : [];
+  return db;
 }
 
 function saveDb(db) {
@@ -140,10 +147,184 @@ export async function mockSignOut() {
   return { data: null, error: null };
 }
 
+// ---------- CAPTCHA + approval gate ----------
+
+const MOCK_SUPER_ADMIN_EMAIL = String(
+  import.meta.env?.VITE_MOCK_SUPER_ADMIN_EMAIL || 'admin@respos.local'
+).trim().toLowerCase();
+
+export async function mockPrepareStoreApplication({
+  email,
+  storeName,
+  displayName,
+  captchaToken,
+}) {
+  await delay(200);
+  if (!captchaToken) {
+    return { data: null, error: { message: 'Please complete the human check' } };
+  }
+  const payload = {
+    email: String(email || '').trim().toLowerCase(),
+    storeName: String(storeName || '').trim(),
+    displayName: String(displayName || '').trim(),
+  };
+  return {
+    data: {
+      captchaProof: `mock-proof:${Date.now()}:${encodeURIComponent(JSON.stringify(payload))}`,
+    },
+    error: null,
+  };
+}
+
+export async function mockSubmitStoreApplication({
+  email,
+  storeName,
+  displayName,
+  captchaProof,
+}) {
+  await delay();
+  const db = loadDb();
+  const user = findUser(db, currentSessionId());
+  if (!user) return { data: null, error: { message: 'Not authenticated' } };
+  const fields = {
+    email: String(email || '').trim().toLowerCase(),
+    storeName: String(storeName || '').trim(),
+    displayName: String(displayName || '').trim(),
+  };
+  if (user.email !== fields.email) {
+    return { data: null, error: { message: 'Application email must match the signed-in account' } };
+  }
+  let proofValid = false;
+  try {
+    const [, issuedAt, encoded, extra] = String(captchaProof || '').split(':');
+    const proofFields = JSON.parse(decodeURIComponent(encoded));
+    proofValid = !extra &&
+      Date.now() - Number(issuedAt) < 10 * 60 * 1000 &&
+      Number(issuedAt) <= Date.now() &&
+      JSON.stringify(proofFields) === JSON.stringify(fields);
+  } catch {
+    proofValid = false;
+  }
+  if (!proofValid) {
+    return { data: null, error: { message: 'Human check expired. Please try again.' } };
+  }
+  const pending = db.applications.find(
+    (application) => application.applicantId === user.id && application.status === 'pending'
+  );
+  if (pending) {
+    return { data: { application: pending }, error: { message: 'You already have an application waiting for review' } };
+  }
+
+  const now = new Date().toISOString();
+  const application = {
+    id: uid(),
+    applicantId: user.id,
+    ownerEmail: user.email,
+    ownerDisplayName: String(displayName || '').trim(),
+    storeName: String(storeName || '').trim(),
+    status: 'pending',
+    reviewNote: '',
+    reviewedAt: null,
+    approvedStoreId: null,
+    createdAt: now,
+    updatedAt: now,
+  };
+  db.applications.push(application);
+  const profile = db.profiles.find((entry) => entry.id === user.id);
+  if (profile) profile.displayName = application.ownerDisplayName;
+  user.displayName = application.ownerDisplayName;
+  saveDb(db);
+  return { data: { application }, error: null };
+}
+
+export async function mockGetMyStoreApplication() {
+  await delay(200);
+  const db = loadDb();
+  const userId = currentSessionId();
+  const applications = db.applications
+    .filter((application) => application.applicantId === userId)
+    .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+  return { data: { application: applications[0] || null }, error: null };
+}
+
+export async function mockIsPlatformAdmin() {
+  await delay(100);
+  const db = loadDb();
+  const user = findUser(db, currentSessionId());
+  return {
+    data: { isPlatformAdmin: user?.email === MOCK_SUPER_ADMIN_EMAIL },
+    error: null,
+  };
+}
+
+export async function mockListStoreApplications() {
+  await delay();
+  const access = await mockIsPlatformAdmin();
+  if (!access.data?.isPlatformAdmin) {
+    return { data: null, error: { message: 'Platform super user access required' } };
+  }
+  const applications = loadDb().applications
+    .slice()
+    .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+  return { data: { applications }, error: null };
+}
+
+export async function mockReviewStoreApplication({ applicationId, decision, reviewNote }) {
+  await delay();
+  const access = await mockIsPlatformAdmin();
+  if (!access.data?.isPlatformAdmin) {
+    return { data: null, error: { message: 'Platform super user access required' } };
+  }
+
+  const db = loadDb();
+  const application = db.applications.find((entry) => entry.id === applicationId);
+  if (!application || application.status !== 'pending') {
+    return { data: null, error: { message: 'This application has already been handled' } };
+  }
+  if (!['approved', 'rejected'].includes(decision)) {
+    return { data: null, error: { message: 'Invalid review decision' } };
+  }
+
+  application.status = decision;
+  application.reviewNote = String(reviewNote || '').trim();
+  application.reviewedAt = new Date().toISOString();
+  application.updatedAt = application.reviewedAt;
+
+  let result = { id: application.id, status: decision, reviewNote: application.reviewNote };
+  if (decision === 'approved') {
+    const applicant = findUser(db, application.applicantId);
+    if (!applicant) return { data: null, error: { message: 'Applicant account not found' } };
+    const store = {
+      id: uid(),
+      name: application.storeName,
+      slug: uniqueStoreSlug(db, application.storeName),
+      currency: DEFAULT_CURRENCY,
+      taxRate: DEFAULT_TAX_RATE,
+      settings: {},
+      createdAt: Date.now(),
+      createdBy: applicant.id,
+    };
+    db.stores.push(store);
+    db.memberships.push({
+      storeId: store.id,
+      profileId: applicant.id,
+      role: 'admin',
+      displayName: application.ownerDisplayName || applicant.displayName || 'Owner',
+      pin: null,
+      active: true,
+      createdAt: Date.now(),
+    });
+    application.approvedStoreId = store.id;
+    result = { ...result, storeId: store.id, slug: store.slug };
+  }
+  saveDb(db);
+  return { data: { result, application: { ...application } }, error: null };
+}
+
 // ---------- Stores & memberships ----------
 
-// Create a store and make the signed-in user its admin (the in-browser
-// equivalent of the SQL `register_store()` function).
+// Legacy mock helper used by the store/PIN regression script. Production UI
+// creation is approval-gated above; this direct helper is not exposed there.
 export async function mockRegisterStore({ storeName, displayName }) {
   await delay();
   const db = loadDb();
